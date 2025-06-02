@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "combatlearn"
+version = "0.1.0"
+description = "combatlearn makes the popular ComBat batch-effect correction algorithm available for use into machine learning frameworks. It lets you harmonise high-dimensional data inside a scikit-learn Pipeline, so that cross-validation and grid-search automatically take batch structure into account, without data leakage."
+authors = [{name="Ettore Rocchi", email="ettoreroc@gmail.com"}]
+requires-python = ">=3.9"
+dependencies = ["pandas>=1.3", "numpy>=1.21", "scikit-learn>=1.2", "pytest>=7"]
+readme = "README.md"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["combatlearn*"]
