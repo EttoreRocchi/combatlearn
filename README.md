@@ -14,7 +14,7 @@
 ## Installation
 
 ```bash
-git clone https://github.com/EttoreRocchi/comabtlearn.git
+git clone https://github.com/EttoreRocchi/combatlearn.git
 cd combatlearn
 pip install .
 pytest -q # optional, to run tests
@@ -44,7 +44,7 @@ pipe = Pipeline([
         method="fortin", # or "johnson" or "chen"
         parametric=True # default
     )),
-
+    ("scaler", StandardScaler()),
     ("clf", LogisticRegression())
 ])
 
