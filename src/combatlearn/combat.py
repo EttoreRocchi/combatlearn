@@ -21,7 +21,7 @@ from typing import Literal
 import warnings
 
 
-class ComBatModel(BaseEstimator, TransformerMixin):
+class ComBatModel:
     """ComBat algorithm.
 
     Parameters
@@ -348,10 +348,12 @@ class ComBatModel(BaseEstimator, TransformerMixin):
 
             def aprior(delta):
                 m, s2 = delta.mean(), delta.var()
+                s2 = max(s2, self.eps)
                 return (2 * s2 + m ** 2) / s2
 
             def bprior(delta):
                 m, s2 = delta.mean(), delta.var()
+                s2 = max(s2, self.eps)
                 return (m * s2 + m ** 3) / s2
 
             gamma_star = np.empty_like(gamma_hat)
