@@ -1,7 +1,7 @@
 # **combatlearn**
 
-<div align="left">
-<p><img src="docs/logo.png" width="350" /></p>
+<div align="center">
+<p><img src="https://raw.githubusercontent.com/EttoreRocchi/combatlearn/main/docs/logo.png" alt="combatlearn logo" width="350" /></p>
 </div>
 
 **combatlearn** makes the popular _ComBat_ batch-effect correction algorithm available for use into machine learning frameworks. It lets you harmonise high-dimensional data inside a scikit-learn `Pipeline`, so that cross-validation and grid-search automatically take batch structure into account, **without data leakage**.
@@ -14,10 +14,7 @@
 ## Installation
 
 ```bash
-git clone https://github.com/EttoreRocchi/combatlearn.git
-cd combatlearn
-pip install .
-pytest -q # optional, to run tests
+pip install combatlearn
 ```
 
 ## Quick start
@@ -42,14 +39,14 @@ pipe = Pipeline([
         discrete_covariates=diag,
         continuous_covariates=age,
         method="fortin", # or "johnson" or "chen"
-        parametric=True # default
+        parametric=True
     )),
     ("scaler", StandardScaler()),
     ("clf", LogisticRegression())
 ])
 
 param_grid = {
-    "combat__parametric": [True, False],
+    "combat__mean_only": [True, False],
     "clf__C": [0.01, 0.1, 1, 10],
 }
 
@@ -69,3 +66,23 @@ print(f"Best CV AUROC: {grid.best_score_:.3f}")
 ## Contributing
 
 Pull requests, bug reports, and feature ideas are welcome: feel free to open a PR!
+
+## Acknowledgements
+
+This project builds on the excellent work of the ComBat family of harmonisation methods.
+We gratefully acknowledge:
+
+- [**ComBat**](https://rdrr.io/bioc/sva/man/ComBat.html)
+- [**neuroCombat**](https://github.com/Jfortin1/neuroCombat)
+- [**CovBat**](https://github.com/andy1764/CovBat_Harmonization)
+
+## Citation
+
+If **combatlearn** is useful in your research, please cite the original
+papers:
+
+- Johnson WE, Li C, Rabinovic A. Adjusting batch effects in microarray expression data using empirical Bayes methods. _Biostatistics_. 2007 Jan;8(1):118-27. doi: [10.1093/biostatistics/kxj037](https://doi.org/10.1093/biostatistics/kxj037)
+
+- Fortin JP, Cullen N, Sheline YI, Taylor WD, Aselcioglu I, Cook PA, Adams P, Cooper C, Fava M, McGrath PJ, McInnis M, Phillips ML, Trivedi MH, Weissman MM, Shinohara RT. Harmonization of cortical thickness measurements across scanners and sites. _Neuroimage_. 2018 Feb 15;167:104-120. doi: [10.1016/j.neuroimage.2017.11.024](https://doi.org/10.1016/j.neuroimage.2017.11.024)
+
+- Chen AA, Beer JC, Tustison NJ, Cook PA, Shinohara RT, Shou H; Alzheimer's Disease Neuroimaging Initiative. Mitigating site effects in covariance for machine learning in neuroimaging data. _Hum Brain Mapp_. 2022 Mar;43(4):1179-1195. doi: [10.1002/hbm.25688](https://doi.org/10.1002/hbm.25688)
