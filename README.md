@@ -4,7 +4,7 @@
 <p><img src="https://raw.githubusercontent.com/EttoreRocchi/combatlearn/main/docs/logo.png" alt="combatlearn logo" width="350" /></p>
 </div>
 
-**combatlearn** makes the popular _ComBat_ batch-effect correction algorithm available for use into machine learning frameworks. It lets you harmonise high-dimensional data inside a scikit-learn `Pipeline`, so that cross-validation and grid-search automatically take batch structure into account, **without data leakage**.
+**combatlearn** makes the popular _ComBat_ (and _CovBat_) batch-effect correction algorithm available for use into machine learning frameworks. It lets you harmonise high-dimensional data inside a scikit-learn `Pipeline`, so that cross-validation and grid-search automatically take batch structure into account, **without data leakage**.
 
 **Three methods**:
 - `method="johnson"` - classic ComBat (Johnson _et al._, 2007)
@@ -62,6 +62,8 @@ grid.fit(X, y)
 print("Best parameters:", grid.best_params_)
 print(f"Best CV AUROC: {grid.best_score_:.3f}")
 ```
+
+For a full example of how to use **combatlearn** see the [notebook demo](https://github.com/EttoreRocchi/combatlearn/blob/main/demo/combatlearn_demo.ipynb)
 
 ## Contributing
 
