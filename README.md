@@ -1,5 +1,6 @@
 # **combatlearn**
 
+[![Python versions](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12-blue?logo=python)](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12-blue?logo=python)
 [![Test](https://github.com/EttoreRocchi/combatlearn/actions/workflows/test.yaml/badge.svg)](https://github.com/EttoreRocchi/combatlearn/actions/workflows/test.yaml)
 [![Downloads](https://static.pepy.tech/badge/combatlearn)](https://static.pepy.tech/badge/combatlearn)
 [![PyPI version](https://badge.fury.io/py/combatlearn.svg)](https://pypi.org/project/combatlearn/)
