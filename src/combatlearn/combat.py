@@ -1,5 +1,3 @@
-__author__ = "Ettore Rocchi"
-
 """ComBat algorithm.
 
 `ComBatModel` implements both:
@@ -10,6 +8,7 @@ __author__ = "Ettore Rocchi"
 `ComBat` makes the model compatible with scikit-learn by stashing
 the batch (and optional covariates) at construction.
 """
+from __future__ import annotations
 
 import numpy as np
 import numpy.linalg as la
@@ -19,8 +18,9 @@ from sklearn.utils.validation import check_is_fitted
 from sklearn.decomposition import PCA
 from typing import Literal, Optional, Union, Dict, Tuple, Any, cast
 import numpy.typing as npt
-from __future__ import annotations
 import warnings
+
+__author__ = "Ettore Rocchi"
 
 ArrayLike = Union[pd.DataFrame, pd.Series, npt.NDArray[Any]]
 FloatArray = npt.NDArray[np.float64]
@@ -233,7 +233,7 @@ class ComBatModel:
         p_design = design.shape[1]
 
         X_np = X.values
-        beta_hat = la.inv(design.T @ design) @ design.T @ X_np
+        beta_hat = la.lstsq(design, X_np, rcond=None)[0]
 
         gamma_hat = beta_hat[:n_batch]
         self._beta_hat_nonbatch = beta_hat[n_batch:]
