@@ -3,9 +3,9 @@ __author__ = "Ettore Rocchi"
 """ComBat algorithm.
 
 `ComBatModel` implements both:
-    * Johnson et al. (2007) vanilla ComBat (method="johnson")
-    * Fortin et al. (2018) extension with covariates (method="fortin")
-    * Chen et al. (2022) CovBat (method="chen")
+    * Johnson et al. (2007) vanilla ComBat (method="johnson")
+    * Fortin et al. (2018) extension with covariates (method="fortin")
+    * Chen et al. (2022) CovBat (method="chen")
 
 `ComBat` makes the model compatible with scikit-learn by stashing
 the batch (and optional covariates) at construction.
@@ -17,8 +17,13 @@ import pandas as pd
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.utils.validation import check_is_fitted
 from sklearn.decomposition import PCA
-from typing import Literal
+from typing import Literal, Optional, Union, Dict, Tuple, Any, cast
+import numpy.typing as npt
+from __future__ import annotations
 import warnings
+
+ArrayLike = Union[pd.DataFrame, pd.Series, npt.NDArray[Any]]
+FloatArray = npt.NDArray[np.float64]
 
 
 class ComBatModel:
@@ -27,9 +32,9 @@ class ComBatModel:
     Parameters
     ----------
     method : {'johnson', 'fortin', 'chen'}, default='johnson'
-        * 'johnson' – classic ComBat.
-        * 'fortin' – covariate‑aware ComBat.
-        * 'chen' – CovBat, PCA‑based ComBat.
+        * 'johnson' - classic ComBat.
+        * 'fortin' - covariate-aware ComBat.
+        * 'chen' - CovBat, PCA-based ComBat.
     parametric : bool, default=True
         Use the parametric empirical Bayes variant.
     mean_only : bool, default=False
@@ -40,7 +45,7 @@ class ComBatModel:
     covbat_cov_thresh : float, default=0.9
         CovBat: cumulative explained variance threshold for PCA.
     eps : float, default=1e-8
-        Numerical jitter to avoid division‑by‑zero.
+        Numerical jitter to avoid division-by-zero.
     """
 
     def __init__(
@@ -49,21 +54,43 @@ class ComBatModel:
         method: Literal["johnson", "fortin", "chen"] = "johnson", 
         parametric: bool = True,
         mean_only: bool = False,
-        reference_batch=None,
+        reference_batch: Optional[str] = None,
         eps: float = 1e-8,
         covbat_cov_thresh: float = 0.9,
     ) -> None:
-        self.method = method
-        self.parametric = parametric
-        self.mean_only = bool(mean_only)
-        self.reference_batch = reference_batch
-        self.eps = float(eps)
-        self.covbat_cov_thresh = float(covbat_cov_thresh)
+        self.method: str = method
+        self.parametric: bool = parametric
+        self.mean_only: bool = bool(mean_only)
+        self.reference_batch: Optional[str] = reference_batch
+        self.eps: float = float(eps)
+        self.covbat_cov_thresh: float = float(covbat_cov_thresh)
+
+        self._batch_levels: pd.Index
+        self._grand_mean: pd.Series
+        self._pooled_var: pd.Series
+        self._gamma_star: FloatArray
+        self._delta_star: FloatArray
+        self._n_per_batch: Dict[str, int]
+        self._reference_batch_idx: Optional[int]
+        self._beta_hat_nonbatch: FloatArray
+        self._n_batch: int
+        self._p_design: int
+        self._covbat_pca: PCA
+        self._covbat_n_pc: int
+        self._batch_levels_pc: pd.Index
+        self._pc_gamma_star: FloatArray
+        self._pc_delta_star: FloatArray
+        
         if not (0.0 < self.covbat_cov_thresh <= 1.0):
             raise ValueError("covbat_cov_thresh must be in (0, 1].")
 
     @staticmethod
-    def _as_series(arr, index, name):
+    def _as_series(
+        arr: ArrayLike,
+        index: pd.Index,
+        name: str
+    ) -> pd.Series:
+        """Convert array-like to categorical Series with validation."""
         if isinstance(arr, pd.Series):
             ser = arr.copy()
         else:
@@ -73,7 +100,12 @@ class ComBatModel:
         return ser.astype("category")
 
     @staticmethod
-    def _to_df(arr, index, name):
+    def _to_df(
+        arr: Optional[ArrayLike],
+        index: pd.Index,
+        name: str
+    ) -> Optional[pd.DataFrame]:
+        """Convert array-like to DataFrame."""
         if arr is None:
             return None
         if isinstance(arr, pd.Series):
@@ -86,13 +118,14 @@ class ComBatModel:
 
     def fit(
         self,
-        X,
-        y=None,
+        X: ArrayLike,
+        y: Optional[ArrayLike] = None,
         *,
-        batch,
-        discrete_covariates=None,
-        continuous_covariates=None,
-    ):
+        batch: ArrayLike,
+        discrete_covariates: Optional[ArrayLike] = None,
+        continuous_covariates: Optional[ArrayLike] = None,
+    ) -> ComBatModel:
+        """Fit the ComBat model."""
         method = self.method.lower()
         if method not in {"johnson", "fortin", "chen"}:
             raise ValueError("method must be 'johnson', 'fortin', or 'chen'.")
@@ -103,7 +136,6 @@ class ComBatModel:
 
         disc = self._to_df(discrete_covariates, idx, "discrete_covariates")
         cont = self._to_df(continuous_covariates, idx, "continuous_covariates")
-
 
         if self.reference_batch is not None and self.reference_batch not in batch.cat.categories:
             raise ValueError(
@@ -127,38 +159,39 @@ class ComBatModel:
         self,
         X: pd.DataFrame,
         batch: pd.Series
-    ):
-        """
-        Johnson et al. (2007) ComBat.
-        """
+    ) -> None:
+        """Johnson et al. (2007) ComBat."""
         self._batch_levels = batch.cat.categories
         pooled_var = X.var(axis=0, ddof=1) + self.eps
         grand_mean = X.mean(axis=0)
 
         Xs = (X - grand_mean) / np.sqrt(pooled_var)
 
-        n_per_batch: dict[str, int] = {}
-        gamma_hat, delta_hat = [], []
+        n_per_batch: Dict[str, int] = {}
+        gamma_hat: list[npt.NDArray[np.float64]] = []
+        delta_hat: list[npt.NDArray[np.float64]] = []
+        
         for lvl in self._batch_levels:
             idx = batch == lvl
-            n_b = idx.sum()
+            n_b = int(idx.sum())
             if n_b < 2:
                 raise ValueError(f"Batch '{lvl}' has <2 samples.")
-            n_per_batch[lvl] = n_b
+            n_per_batch[str(lvl)] = n_b
             xb = Xs.loc[idx]
             gamma_hat.append(xb.mean(axis=0).values)
             delta_hat.append(xb.var(axis=0, ddof=1).values + self.eps)
-        gamma_hat = np.vstack(gamma_hat)
-        delta_hat = np.vstack(delta_hat)
+
+        gamma_hat_arr = np.vstack(gamma_hat)
+        delta_hat_arr = np.vstack(delta_hat)
 
         if self.mean_only:
             gamma_star = self._shrink_gamma(
-                gamma_hat, delta_hat, n_per_batch, parametric=self.parametric
+                gamma_hat_arr, delta_hat_arr, n_per_batch, parametric=self.parametric
             )
-            delta_star = np.ones_like(delta_hat)
+            delta_star = np.ones_like(delta_hat_arr)
         else:
             gamma_star, delta_star = self._shrink_gamma_delta(
-                gamma_hat, delta_hat, n_per_batch, parametric=self.parametric
+                gamma_hat_arr, delta_hat_arr, n_per_batch, parametric=self.parametric
             )
 
         if self.reference_batch is not None:
@@ -182,18 +215,16 @@ class ComBatModel:
         self,
         X: pd.DataFrame,
         batch: pd.Series,
-        disc: pd.DataFrame | None,
-        cont: pd.DataFrame | None,
-    ):
-        """
-        Fortin et al. (2018) ComBat.
-        """
+        disc: Optional[pd.DataFrame],
+        cont: Optional[pd.DataFrame],
+    ) -> None:
+        """Fortin et al. (2018) ComBat."""
         batch_levels = batch.cat.categories
         n_batch = len(batch_levels)
         n_samples = len(X)
 
         batch_dummies = pd.get_dummies(batch, drop_first=False)
-        parts = [batch_dummies]
+        parts: list[pd.DataFrame] = [batch_dummies]
         if disc is not None:
             parts.append(pd.get_dummies(disc.astype("category"), drop_first=True))
         if cont is not None:
@@ -207,15 +238,15 @@ class ComBatModel:
         gamma_hat = beta_hat[:n_batch]
         self._beta_hat_nonbatch = beta_hat[n_batch:]
 
-        n_per_batch = batch.value_counts().sort_index().values
-        self._n_per_batch = dict(zip(batch_levels, n_per_batch))
+        n_per_batch_arr = batch.value_counts().sort_index().values
+        self._n_per_batch = dict(zip(batch_levels, n_per_batch_arr))
 
-        grand_mean = (n_per_batch / n_samples) @ gamma_hat
-        self._grand_mean = grand_mean
+        grand_mean = (n_per_batch_arr / n_samples) @ gamma_hat
+        self._grand_mean = pd.Series(grand_mean, index=X.columns)
 
         resid = X_np - design @ beta_hat
         var_pooled = (resid ** 2).sum(axis=0) / (n_samples - p_design) + self.eps
-        self._pooled_var = var_pooled
+        self._pooled_var = pd.Series(var_pooled, index=X.columns)
 
         stand_mean = grand_mean + design[:, n_batch:] @ self._beta_hat_nonbatch
         Xs = (X_np - stand_mean) / np.sqrt(var_pooled)
@@ -227,12 +258,12 @@ class ComBatModel:
 
         if self.mean_only:
             gamma_star = self._shrink_gamma(
-                gamma_hat, delta_hat, n_per_batch, parametric=self.parametric
+                gamma_hat, delta_hat, n_per_batch_arr, parametric=self.parametric
             )
             delta_star = np.ones_like(delta_hat)
         else:
             gamma_star, delta_star = self._shrink_gamma_delta(
-                gamma_hat, delta_hat, n_per_batch, parametric=self.parametric
+                gamma_hat, delta_hat, n_per_batch_arr, parametric=self.parametric
             )
 
         if self.reference_batch is not None:
@@ -256,9 +287,10 @@ class ComBatModel:
         self,
         X: pd.DataFrame,
         batch: pd.Series,
-        disc: pd.DataFrame | None,
-        cont: pd.DataFrame | None,
-    ):
+        disc: Optional[pd.DataFrame],
+        cont: Optional[pd.DataFrame],
+    ) -> None:
+        """Chen et al. (2022) CovBat."""
         self._fit_fortin(X, batch, disc, cont)
         X_meanvar_adj = self._transform_fortin(X, batch, disc, cont)
         X_centered = X_meanvar_adj - X_meanvar_adj.mean(axis=0)
@@ -273,23 +305,24 @@ class ComBatModel:
         self._batch_levels_pc = self._batch_levels
         n_per_batch = self._n_per_batch
 
-        gamma_hat, delta_hat = [], []
+        gamma_hat: list[npt.NDArray[np.float64]] = []
+        delta_hat: list[npt.NDArray[np.float64]] = []
         for lvl in self._batch_levels_pc:
             idx = batch == lvl
             xb = scores_df.loc[idx]
             gamma_hat.append(xb.mean(axis=0).values)
             delta_hat.append(xb.var(axis=0, ddof=1).values + self.eps)
-        gamma_hat = np.vstack(gamma_hat)
-        delta_hat = np.vstack(delta_hat)
+        gamma_hat_arr = np.vstack(gamma_hat)
+        delta_hat_arr = np.vstack(delta_hat)
 
         if self.mean_only:
             gamma_star = self._shrink_gamma(
-                gamma_hat, delta_hat, n_per_batch, parametric=self.parametric
+                gamma_hat_arr, delta_hat_arr, n_per_batch, parametric=self.parametric
             )
-            delta_star = np.ones_like(delta_hat)
+            delta_star = np.ones_like(delta_hat_arr)
         else:
             gamma_star, delta_star = self._shrink_gamma_delta(
-                gamma_hat, delta_hat, n_per_batch, parametric=self.parametric
+                gamma_hat_arr, delta_hat_arr, n_per_batch, parametric=self.parametric
             )
 
         if self.reference_batch is not None:
@@ -305,14 +338,15 @@ class ComBatModel:
 
     def _shrink_gamma_delta(
         self,
-        gamma_hat: np.ndarray,
-        delta_hat: np.ndarray,
-        n_per_batch: dict | np.ndarray,
+        gamma_hat: FloatArray,
+        delta_hat: FloatArray,
+        n_per_batch: Union[Dict[str, int], FloatArray],
         *,
         parametric: bool,
         max_iter: int = 100,
         tol: float = 1e-4,
-    ):
+    ) -> Tuple[FloatArray, FloatArray]:
+        """Empirical Bayes shrinkage estimation."""
         if parametric:
             gamma_bar = gamma_hat.mean(axis=0)
             t2 = gamma_hat.var(axis=0, ddof=1)
@@ -323,6 +357,7 @@ class ComBatModel:
             gamma_star = np.empty_like(gamma_hat)
             delta_star = np.empty_like(delta_hat)
             n_vec = np.array(list(n_per_batch.values())) if isinstance(n_per_batch, dict) else n_per_batch
+
             for i in range(B):
                 n_i = n_vec[i]
                 g, d = gamma_hat[i], delta_hat[i]
@@ -340,18 +375,29 @@ class ComBatModel:
             gamma_bar = gamma_hat.mean(axis=0)
             t2 = gamma_hat.var(axis=0, ddof=1)
 
-            def postmean(g_hat, g_bar, n, d_star, t2_):
+            def postmean(
+                g_hat: FloatArray,
+                g_bar: FloatArray,
+                n: float,
+                d_star: FloatArray,
+                t2_: FloatArray
+            ) -> FloatArray:
                 return (t2_ * n * g_hat + d_star * g_bar) / (t2_ * n + d_star)
 
-            def postvar(sum2, n, a, b):
+            def postvar(
+                sum2: FloatArray,
+                n: float,
+                a: FloatArray,
+                b: FloatArray
+            ) -> FloatArray:
                 return (0.5 * sum2 + b) / (n / 2.0 + a - 1.0)
 
-            def aprior(delta):
+            def aprior(delta: FloatArray) -> FloatArray:
                 m, s2 = delta.mean(), delta.var()
                 s2 = max(s2, self.eps)
                 return (2 * s2 + m ** 2) / s2
 
-            def bprior(delta):
+            def bprior(delta: FloatArray) -> FloatArray:
                 m, s2 = delta.mean(), delta.var()
                 s2 = max(s2, self.eps)
                 return (m * s2 + m ** 3) / s2
@@ -382,24 +428,25 @@ class ComBatModel:
 
     def _shrink_gamma(
         self,
-        gamma_hat: np.ndarray,
-        delta_hat: np.ndarray,
-        n_per_batch: dict | np.ndarray,
+        gamma_hat: FloatArray,
+        delta_hat: FloatArray,
+        n_per_batch: Union[Dict[str, int], FloatArray],
         *,
         parametric: bool,
-    ) -> np.ndarray:
+    ) -> FloatArray:
         """Convenience wrapper that returns only γ⋆ (for *mean‑only* mode)."""
         gamma, _ = self._shrink_gamma_delta(gamma_hat, delta_hat, n_per_batch, parametric=parametric)
         return gamma
 
     def transform(
         self,
-        X,
+        X: ArrayLike,
         *,
-        batch,
-        discrete_covariates=None,
-        continuous_covariates=None,
-    ):
+        batch: ArrayLike,
+        discrete_covariates: Optional[ArrayLike] = None,
+        continuous_covariates: Optional[ArrayLike] = None,
+    ) -> pd.DataFrame:
+        """Transform the data using fitted ComBat parameters."""
         check_is_fitted(self, ["_gamma_star"])
         if not isinstance(X, pd.DataFrame):
             X = pd.DataFrame(X)
@@ -418,8 +465,15 @@ class ComBatModel:
             return self._transform_fortin(X, batch, disc, cont)
         elif method == "chen":
             return self._transform_chen(X, batch, disc, cont)
+        else:
+            raise ValueError(f"Unknown method: {method}")
 
-    def _transform_johnson(self, X: pd.DataFrame, batch: pd.Series):
+    def _transform_johnson(
+        self,
+        X: pd.DataFrame,
+        batch: pd.Series
+    ) -> pd.DataFrame:
+        """Johnson transform implementation."""
         pooled = self._pooled_var
         grand = self._grand_mean
 
@@ -447,11 +501,12 @@ class ComBatModel:
         self,
         X: pd.DataFrame,
         batch: pd.Series,
-        disc: pd.DataFrame | None,
-        cont: pd.DataFrame | None,
-    ):
+        disc: Optional[pd.DataFrame],
+        cont: Optional[pd.DataFrame],
+    ) -> pd.DataFrame:
+        """Fortin transform implementation."""
         batch_dummies = pd.get_dummies(batch, drop_first=False)[self._batch_levels]
-        parts = [batch_dummies]
+        parts: list[pd.DataFrame] = [batch_dummies]
         if disc is not None:
             parts.append(pd.get_dummies(disc.astype("category"), drop_first=True))
         if cont is not None:
@@ -460,8 +515,8 @@ class ComBatModel:
         design = pd.concat(parts, axis=1).astype(float).values
 
         X_np = X.values
-        stand_mean = self._grand_mean + design[:, self._n_batch:] @ self._beta_hat_nonbatch
-        Xs = (X_np - stand_mean) / np.sqrt(self._pooled_var)
+        stand_mean = self._grand_mean.values + design[:, self._n_batch:] @ self._beta_hat_nonbatch
+        Xs = (X_np - stand_mean) / np.sqrt(self._pooled_var.values)
 
         for i, lvl in enumerate(self._batch_levels):
             idx = batch == lvl
@@ -478,19 +533,20 @@ class ComBatModel:
             else:
                 Xs[idx] = (Xs[idx] - g) / np.sqrt(d)
 
-        X_adj = Xs * np.sqrt(self._pooled_var) + stand_mean
+        X_adj = Xs * np.sqrt(self._pooled_var.values) + stand_mean
         return pd.DataFrame(X_adj, index=X.index, columns=X.columns)
     
     def _transform_chen(
         self,
         X: pd.DataFrame,
         batch: pd.Series,
-        disc: pd.DataFrame | None,
-        cont: pd.DataFrame | None,
-    ):
+        disc: Optional[pd.DataFrame],
+        cont: Optional[pd.DataFrame],
+    ) -> pd.DataFrame:
+        """Chen transform implementation."""
         X_meanvar_adj = self._transform_fortin(X, batch, disc, cont)
         X_centered = X_meanvar_adj - self._covbat_pca.mean_
-        scores = self._covbat_pca.transform(X_centered)
+        scores = self._covbat_pca.transform(X_centered.values)
         n_pc = self._covbat_n_pc
         scores_adj = scores.copy()
 
@@ -515,19 +571,19 @@ class ComBat(BaseEstimator, TransformerMixin):
     """Pipeline‑friendly wrapper around `ComBatModel`.
 
     Stores batch (and optional covariates) passed at construction and
-    appropriately used them also for separate `fit` and `transform`.
+    appropriately uses them for separate `fit` and `transform`.
     """
 
     def __init__(
         self,
-        batch,
+        batch: ArrayLike,
         *,
-        discrete_covariates=None,
-        continuous_covariates=None,
+        discrete_covariates: Optional[ArrayLike] = None,
+        continuous_covariates: Optional[ArrayLike] = None,
         method: str = "johnson",
         parametric: bool = True,
         mean_only: bool = False,
-        reference_batch=None,
+        reference_batch: Optional[str] = None,
         eps: float = 1e-8,
         covbat_cov_thresh: float = 0.9,
     ) -> None:
@@ -549,8 +605,13 @@ class ComBat(BaseEstimator, TransformerMixin):
             covbat_cov_thresh=covbat_cov_thresh,
         )
 
-    def fit(self, X, y=None):
-        idx = X.index if isinstance(X, pd.DataFrame) else np.arange(len(X))
+    def fit(
+        self,
+        X: ArrayLike,
+        y: Optional[ArrayLike] = None
+    ) -> "ComBat":
+        """Fit the ComBat model."""
+        idx = X.index if isinstance(X, pd.DataFrame) else pd.RangeIndex(len(X))
         batch_vec = self._subset(self.batch, idx)
         disc = self._subset(self.discrete_covariates, idx)
         cont = self._subset(self.continuous_covariates, idx)
@@ -562,8 +623,9 @@ class ComBat(BaseEstimator, TransformerMixin):
         )
         return self
 
-    def transform(self, X):
-        idx = X.index if isinstance(X, pd.DataFrame) else np.arange(len(X))
+    def transform(self, X: ArrayLike) -> pd.DataFrame:
+        """Transform the data using fitted ComBat parameters."""
+        idx = X.index if isinstance(X, pd.DataFrame) else pd.RangeIndex(len(X))
         batch_vec = self._subset(self.batch, idx)
         disc = self._subset(self.discrete_covariates, idx)
         cont = self._subset(self.continuous_covariates, idx)
@@ -575,10 +637,17 @@ class ComBat(BaseEstimator, TransformerMixin):
         )
 
     @staticmethod
-    def _subset(obj, idx):
+    def _subset(
+        obj: Optional[ArrayLike],
+        idx: pd.Index
+    ) -> Optional[Union[pd.DataFrame, pd.Series]]:
+        """Subset array-like object by index."""
         if obj is None:
             return None
         if isinstance(obj, (pd.Series, pd.DataFrame)):
             return obj.loc[idx]
         else:
-            return pd.DataFrame(obj).iloc[idx]
+            if isinstance(obj, np.ndarray) and obj.ndim == 1:
+                return pd.Series(obj, index=idx)
+            else:
+                return pd.DataFrame(obj, index=idx)
