@@ -139,7 +139,7 @@ class ComBatModel:
 
         if self.reference_batch is not None and self.reference_batch not in batch.cat.categories:
             raise ValueError(
-                f"reference_batch={self.reference_batch!r} not present in the data batches "
+                f"reference_batch={self.reference_batch!r} not present in the data batches."
                 f"{list(batch.cat.categories)}"
             )
 
@@ -218,69 +218,94 @@ class ComBatModel:
         disc: Optional[pd.DataFrame],
         cont: Optional[pd.DataFrame],
     ) -> None:
-        """Fortin et al. (2018) ComBat."""
-        batch_levels = batch.cat.categories
-        n_batch = len(batch_levels)
+        """Fortin et al. (2018) neuroComBat."""
+        self._batch_levels = batch.cat.categories
+        n_batch = len(self._batch_levels)
         n_samples = len(X)
 
-        batch_dummies = pd.get_dummies(batch, drop_first=False)
+        batch_dummies = pd.get_dummies(batch, drop_first=False).astype(float)
+        if self.reference_batch is not None:
+            if self.reference_batch not in self._batch_levels:
+                raise ValueError(
+                    f"reference_batch={self.reference_batch!r} not present in batches."
+                    f"{list(self._batch_levels)}"
+                )
+            batch_dummies.loc[:, self.reference_batch] = 1.0
+
         parts: list[pd.DataFrame] = [batch_dummies]
         if disc is not None:
-            parts.append(pd.get_dummies(disc.astype("category"), drop_first=True))
+            parts.append(
+                pd.get_dummies(
+                    disc.astype("category"), drop_first=True
+                ).astype(float)
+            )
+
         if cont is not None:
-            parts.append(cont)
-        design = pd.concat(parts, axis=1).astype(float).values
+            parts.append(cont.astype(float))
+
+        design = pd.concat(parts, axis=1).values
         p_design = design.shape[1]
 
         X_np = X.values
         beta_hat = la.lstsq(design, X_np, rcond=None)[0]
 
-        gamma_hat = beta_hat[:n_batch]
+        beta_hat_batch = beta_hat[:n_batch]
         self._beta_hat_nonbatch = beta_hat[n_batch:]
 
-        n_per_batch_arr = batch.value_counts().sort_index().values
-        self._n_per_batch = dict(zip(batch_levels, n_per_batch_arr))
+        n_per_batch = batch.value_counts().sort_index().astype(int).values
+        self._n_per_batch = dict(zip(self._batch_levels, n_per_batch))
 
-        grand_mean = (n_per_batch_arr / n_samples) @ gamma_hat
+        if self.reference_batch is not None:
+            ref_idx = list(self._batch_levels).index(self.reference_batch)
+            grand_mean = beta_hat_batch[ref_idx]
+        else:
+            grand_mean = (n_per_batch / n_samples) @ beta_hat_batch
+            ref_idx = None
+
         self._grand_mean = pd.Series(grand_mean, index=X.columns)
 
-        resid = X_np - design @ beta_hat
-        var_pooled = (resid ** 2).sum(axis=0) / (n_samples - p_design) + self.eps
+        if self.reference_batch is not None:
+            ref_mask = (batch == self.reference_batch).values
+            resid = X_np[ref_mask] - design[ref_mask] @ beta_hat
+            denom = int(ref_mask.sum())
+        else:
+            resid = X_np - design @ beta_hat
+            denom = n_samples
+        var_pooled = (resid ** 2).sum(axis=0) / denom + self.eps
         self._pooled_var = pd.Series(var_pooled, index=X.columns)
 
         stand_mean = grand_mean + design[:, n_batch:] @ self._beta_hat_nonbatch
         Xs = (X_np - stand_mean) / np.sqrt(var_pooled)
 
-        delta_hat = np.empty_like(gamma_hat)
-        for i, lvl in enumerate(batch_levels):
-            idx = batch == lvl
-            delta_hat[i] = Xs[idx].var(axis=0, ddof=1) + self.eps
+        gamma_hat = np.vstack(
+            [Xs[batch == lvl].mean(axis=0) for lvl in self._batch_levels]
+        )
+        delta_hat = np.vstack(
+            [Xs[batch == lvl].var(axis=0, ddof=1) + self.eps
+             for lvl in self._batch_levels]
+        )
 
         if self.mean_only:
             gamma_star = self._shrink_gamma(
-                gamma_hat, delta_hat, n_per_batch_arr, parametric=self.parametric
+                gamma_hat, delta_hat, n_per_batch,
+                parametric = self.parametric
             )
             delta_star = np.ones_like(delta_hat)
         else:
             gamma_star, delta_star = self._shrink_gamma_delta(
-                gamma_hat, delta_hat, n_per_batch_arr, parametric=self.parametric
+                gamma_hat, delta_hat, n_per_batch,
+                parametric = self.parametric
             )
 
-        if self.reference_batch is not None:
-            ref_idx = list(batch_levels).index(self.reference_batch)
-            gamma_ref = gamma_star[ref_idx]
-            delta_ref = delta_star[ref_idx]
-            gamma_star = gamma_star - gamma_ref
+        if ref_idx is not None:
+            gamma_star[ref_idx] = 0.0
             if not self.mean_only:
-                delta_star = delta_star / delta_ref
-            self._reference_batch_idx = ref_idx
-        else:
-            self._reference_batch_idx = None
+                delta_star[ref_idx] = 1.0
+        self._reference_batch_idx = ref_idx
 
-        self._batch_levels = batch_levels
         self._gamma_star = gamma_star
         self._delta_star = delta_star
-        self._n_batch = n_batch
+        self._n_batch  = n_batch
         self._p_design = p_design
     
     def _fit_chen(
@@ -434,7 +459,7 @@ class ComBatModel:
         *,
         parametric: bool,
     ) -> FloatArray:
-        """Convenience wrapper that returns only γ⋆ (for *mean‑only* mode)."""
+        """Convenience wrapper that returns only γ⋆ (for *mean-only* mode)."""
         gamma, _ = self._shrink_gamma_delta(gamma_hat, delta_hat, n_per_batch, parametric=parametric)
         return gamma
 
@@ -454,7 +479,7 @@ class ComBatModel:
         batch = self._as_series(batch, idx, "batch")
         unseen = set(batch.cat.categories) - set(self._batch_levels)
         if unseen:
-            raise ValueError(f"Unseen batch levels during transform: {unseen}")
+            raise ValueError(f"Unseen batch levels during transform: {unseen}.")
         disc = self._to_df(discrete_covariates, idx, "discrete_covariates")
         cont = self._to_df(continuous_covariates, idx, "continuous_covariates")
 
@@ -466,7 +491,7 @@ class ComBatModel:
         elif method == "chen":
             return self._transform_chen(X, batch, disc, cont)
         else:
-            raise ValueError(f"Unknown method: {method}")
+            raise ValueError(f"Unknown method: {method}.")
 
     def _transform_johnson(
         self,
@@ -485,7 +510,7 @@ class ComBatModel:
             if not idx.any():
                 continue
             if self.reference_batch is not None and lvl == self.reference_batch:
-                X_adj.loc[idx] = X.loc[idx].values  # untouched
+                X_adj.loc[idx] = X.loc[idx].values
                 continue
 
             g = self._gamma_star[i]
@@ -505,18 +530,28 @@ class ComBatModel:
         cont: Optional[pd.DataFrame],
     ) -> pd.DataFrame:
         """Fortin transform implementation."""
-        batch_dummies = pd.get_dummies(batch, drop_first=False)[self._batch_levels]
-        parts: list[pd.DataFrame] = [batch_dummies]
-        if disc is not None:
-            parts.append(pd.get_dummies(disc.astype("category"), drop_first=True))
-        if cont is not None:
-            parts.append(cont)
+        batch_dummies = pd.get_dummies(batch, drop_first=False).astype(float)[self._batch_levels]
+        if self.reference_batch is not None:
+            batch_dummies.loc[:, self.reference_batch] = 1.0
 
-        design = pd.concat(parts, axis=1).astype(float).values
+        parts = [batch_dummies]
+        if disc is not None:
+            parts.append(
+                pd.get_dummies(
+                    disc.astype("category"), drop_first=True
+                ).astype(float)
+            )
+        if cont is not None:
+            parts.append(cont.astype(float))
+
+        design = pd.concat(parts, axis=1).values
 
         X_np = X.values
-        stand_mean = self._grand_mean.values + design[:, self._n_batch:] @ self._beta_hat_nonbatch
-        Xs = (X_np - stand_mean) / np.sqrt(self._pooled_var.values)
+        stand_mu = (
+            self._grand_mean.values +
+            design[:, self._n_batch:] @ self._beta_hat_nonbatch
+        )
+        Xs = (X_np - stand_mu) / np.sqrt(self._pooled_var.values)
 
         for i, lvl in enumerate(self._batch_levels):
             idx = batch == lvl
@@ -533,8 +568,11 @@ class ComBatModel:
             else:
                 Xs[idx] = (Xs[idx] - g) / np.sqrt(d)
 
-        X_adj = Xs * np.sqrt(self._pooled_var.values) + stand_mean
-        return pd.DataFrame(X_adj, index=X.index, columns=X.columns)
+        X_adj = (
+            Xs * np.sqrt(self._pooled_var.values) +
+            stand_mu
+        )
+        return pd.DataFrame(X_adj, index=X.index, columns=X.columns, dtype=float)
     
     def _transform_chen(
         self,
@@ -568,7 +606,7 @@ class ComBatModel:
 
 
 class ComBat(BaseEstimator, TransformerMixin):
-    """Pipeline‑friendly wrapper around `ComBatModel`.
+    """Pipeline-friendly wrapper around `ComBatModel`.
 
     Stores batch (and optional covariates) passed at construction and
     appropriately uses them for separate `fit` and `transform`.
