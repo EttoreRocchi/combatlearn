@@ -14,7 +14,7 @@
 
 **Three methods**:
 - `method="johnson"` - classic ComBat (Johnson _et al._, 2007)
-- `method="fortin"` - covariate-aware ComBat (Fortin _et al._, 2018)
+- `method="fortin"` - neuroComBat (Fortin _et al._, 2018)
 - `method="chen"` - CovBat (Chen _et al._, 2022)
 
 ## Installation
