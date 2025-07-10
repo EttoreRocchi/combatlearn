@@ -69,7 +69,7 @@ print("Best parameters:", grid.best_params_)
 print(f"Best CV AUROC: {grid.best_score_:.3f}")
 ```
 
-For a full example of how to use **combatlearn** see the [notebook demo](https://github.com/EttoreRocchi/combatlearn/blob/main/demo/combatlearn_demo.ipynb)
+For a full example of how to use **combatlearn** see the [notebook demo](https://github.com/EttoreRocchi/combatlearn/blob/main/docs/demo/combatlearn_demo.ipynb)
 
 ## `ComBat` parameters
 
