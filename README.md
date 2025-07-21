@@ -94,6 +94,13 @@ The following section provides a detailed explanation of all parameters availabl
 | `covbat_cov_thresh` | float, int | `0.9` | For `"chen"` method only: Cumulative variance threshold $]0,1[$ to retain PCs in PCA space (e.g., 0.9 = retain 90% explained variance). If an integer is provided, it represents the number of principal components to use. |
 | `eps` | float | `1e-8` | Small jitter value added to variances to prevent divide-by-zero errors during standardization. |
 
+
+### Batch Effect Correction Visualization 
+
+The `plot_transformation` method allows to visualize the **ComBat** transformation effect using dimensionality reduction, showing the before/after comparison of data transformed by `ComBat` using PCA, t-SNE, or UMAP to reduce dimensions for visualization.
+
+For further details see the [notebook demo](https://github.com/EttoreRocchi/combatlearn/blob/main/docs/demo/combatlearn_demo.ipynb).
+
 ## Contributing
 
 Pull requests, bug reports, and feature ideas are welcome: feel free to open a PR!
@@ -102,7 +109,7 @@ Pull requests, bug reports, and feature ideas are welcome: feel free to open a P
 
 [**Ettore Rocchi**](https://github.com/ettorerocchi) @ University of Bologna
 
-[Google Scholar](https://scholar.google.com/citations?user=MKHoGnQAAAAJ) $\cdot$ [Scopus](https://www.scopus.com/authid/detail.uri?authorId=57220152522)
+[Google Scholar](https://scholar.google.com/citations?user=MKHoGnQAAAAJ) | [Scopus](https://www.scopus.com/authid/detail.uri?authorId=57220152522)
 
 ## Acknowledgements
 
