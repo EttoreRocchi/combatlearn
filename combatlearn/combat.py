@@ -18,6 +18,7 @@ from sklearn.utils.validation import check_is_fitted
 from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
 import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
 from typing import Literal, Optional, Union, Dict, Tuple, Any, cast
 import numpy.typing as npt
 import warnings
@@ -811,7 +812,7 @@ class ComBat(BaseEstimator, TransformerMixin):
         else:
             fig = self._create_interactive_plot(
                 X_embedded_orig, X_embedded_trans, batch_vec,
-                reduction_method, n_components, title, show_legend
+                reduction_method, n_components, cmap, title, show_legend
             )
 
         if return_embeddings:
@@ -930,6 +931,7 @@ class ComBat(BaseEstimator, TransformerMixin):
             batch_labels: pd.Series,
             method: str,
             n_components: int,
+            cmap: str,
             title: Optional[str],
             show_legend: bool) -> Any:
         """Create interactive plots using plotly."""
@@ -953,43 +955,69 @@ class ComBat(BaseEstimator, TransformerMixin):
 
         unique_batches = batch_labels.drop_duplicates()
 
+        n_batches = len(unique_batches)
+        cmap_func = plt.cm.get_cmap(cmap)
+        color_list = [mcolors.to_hex(cmap_func(i / max(n_batches - 1, 1))) for i in range(n_batches)]
+
+        batch_to_color = dict(zip(unique_batches, color_list))
+
         for batch in unique_batches:
             mask = batch_labels == batch
 
             if n_components == 2:
                 fig.add_trace(
-                    go.Scatter(x=X_orig[mask, 0], y=X_orig[mask, 1],
-                              mode='markers',
-                              name=f'Batch {batch}',
-                              marker=dict(size=8, line=dict(width=1, color='black')),
-                              showlegend=False),
+                    go.Scatter(
+                        x=X_orig[mask, 0], y=X_orig[mask, 1],
+                        mode='markers',
+                        name=f'Batch {batch}',
+                        marker=dict(
+                            size=8,
+                            color=batch_to_color[batch],
+                            line=dict(width=1, color='black')
+                        ),
+                        showlegend=False),
                     row=1, col=1
                 )
 
                 fig.add_trace(
-                    go.Scatter(x=X_trans[mask, 0], y=X_trans[mask, 1],
-                              mode='markers',
-                              name=f'Batch {batch}',
-                              marker=dict(size=8, line=dict(width=1, color='black')),
-                              showlegend=show_legend),
+                    go.Scatter(
+                        x=X_trans[mask, 0], y=X_trans[mask, 1],
+                        mode='markers',
+                        name=f'Batch {batch}',
+                        marker=dict(
+                            size=8,
+                            color=batch_to_color[batch],
+                            line=dict(width=1, color='black')
+                        ),
+                        showlegend=show_legend),
                     row=1, col=2
                 )
             else:
                 fig.add_trace(
-                    go.Scatter3d(x=X_orig[mask, 0], y=X_orig[mask, 1], z=X_orig[mask, 2],
-                                mode='markers',
-                                name=f'Batch {batch}',
-                                marker=dict(size=5, line=dict(width=0.5, color='black')),
-                                showlegend=False),
+                    go.Scatter3d(
+                        x=X_orig[mask, 0], y=X_orig[mask, 1], z=X_orig[mask, 2],
+                        mode='markers',
+                        name=f'Batch {batch}',
+                        marker=dict(
+                            size=5,
+                            color=batch_to_color[batch],
+                            line=dict(width=0.5, color='black')
+                        ),
+                        showlegend=False),
                     row=1, col=1
                 )
 
                 fig.add_trace(
-                    go.Scatter3d(x=X_trans[mask, 0], y=X_trans[mask, 1], z=X_trans[mask, 2],
-                                mode='markers',
-                                name=f'Batch {batch}',
-                                marker=dict(size=5, line=dict(width=0.5, color='black')),
-                                showlegend=show_legend),
+                    go.Scatter3d(
+                        x=X_trans[mask, 0], y=X_trans[mask, 1], z=X_trans[mask, 2],
+                        mode='markers',
+                        name=f'Batch {batch}',
+                        marker=dict(
+                            size=5,
+                            color=batch_to_color[batch],
+                            line=dict(width=0.5, color='black')
+                        ),
+                        showlegend=show_legend),
                     row=1, col=2
                 )
 
