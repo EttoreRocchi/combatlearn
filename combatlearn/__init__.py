@@ -1,4 +1,5 @@
-from .combat import ComBatModel, ComBat
+from .combat import ComBat
 
-__all__ = ["ComBatModel", "ComBat"]
-__version__ = "0.2.2"
+__all__ = ["ComBat"]
+__version__ = "1.0.0"
+__author__ = "Ettore Rocchi"
