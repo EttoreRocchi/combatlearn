@@ -14,29 +14,17 @@ import numpy as np
 import numpy.linalg as la
 import pandas as pd
 from sklearn.base import BaseEstimator, TransformerMixin
-from sklearn.utils.validation import check_is_fitted
 from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
+import matplotlib
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
-from typing import Literal, Optional, Union, Dict, Tuple, Any, cast
+from typing import Literal, Optional, Union, Dict, Tuple, Any
 import numpy.typing as npt
 import warnings
-
-try:
-    import umap
-    UMAP_AVAILABLE = True
-except ImportError:
-    UMAP_AVAILABLE = False
-
-try:
-    import plotly.graph_objects as go
-    from plotly.subplots import make_subplots
-    PLOTLY_AVAILABLE = True
-except ImportError:
-    PLOTLY_AVAILABLE = False
-
-__author__ = "Ettore Rocchi"
+import umap
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
 ArrayLike = Union[pd.DataFrame, pd.Series, npt.NDArray[Any]]
 FloatArray = npt.NDArray[np.float64]
@@ -58,8 +46,9 @@ class ComBatModel:
         ignoring the variance (`delta_star`).
     reference_batch : str, optional
         If specified, the batch level to use as reference.
-    covbat_cov_thresh : float, default=0.9
-        CovBat: cumulative explained variance threshold for PCA.
+    covbat_cov_thresh : float or int, default=0.9
+        CovBat: cumulative variance threshold (0, 1] to retain PCs, or
+        integer >= 1 specifying the number of components directly.
     eps : float, default=1e-8
         Numerical jitter to avoid division-by-zero.
     """
@@ -67,19 +56,19 @@ class ComBatModel:
     def __init__(
         self,
         *,
-        method: Literal["johnson", "fortin", "chen"] = "johnson", 
+        method: Literal["johnson", "fortin", "chen"] = "johnson",
         parametric: bool = True,
         mean_only: bool = False,
         reference_batch: Optional[str] = None,
         eps: float = 1e-8,
-        covbat_cov_thresh: float = 0.9,
+        covbat_cov_thresh: Union[float, int] = 0.9,
     ) -> None:
         self.method: str = method
         self.parametric: bool = parametric
         self.mean_only: bool = bool(mean_only)
         self.reference_batch: Optional[str] = reference_batch
         self.eps: float = float(eps)
-        self.covbat_cov_thresh: float = float(covbat_cov_thresh)
+        self.covbat_cov_thresh: Union[float, int] = covbat_cov_thresh
 
         self._batch_levels: pd.Index
         self._grand_mean: pd.Series
@@ -96,9 +85,16 @@ class ComBatModel:
         self._batch_levels_pc: pd.Index
         self._pc_gamma_star: FloatArray
         self._pc_delta_star: FloatArray
-        
-        if not (0.0 < self.covbat_cov_thresh <= 1.0):
-            raise ValueError("covbat_cov_thresh must be in (0, 1].")
+
+        # Validate covbat_cov_thresh
+        if isinstance(self.covbat_cov_thresh, float):
+            if not (0.0 < self.covbat_cov_thresh <= 1.0):
+                raise ValueError("covbat_cov_thresh must be in (0, 1] when float.")
+        elif isinstance(self.covbat_cov_thresh, int):
+            if self.covbat_cov_thresh < 1:
+                raise ValueError("covbat_cov_thresh must be >= 1 when int.")
+        else:
+            raise TypeError("covbat_cov_thresh must be float or int.")
 
     @staticmethod
     def _as_series(
@@ -336,8 +332,14 @@ class ComBatModel:
         X_meanvar_adj = self._transform_fortin(X, batch, disc, cont)
         X_centered = X_meanvar_adj - X_meanvar_adj.mean(axis=0)
         pca = PCA(svd_solver="full", whiten=False).fit(X_centered)
-        cumulative = np.cumsum(pca.explained_variance_ratio_)
-        n_pc = int(np.searchsorted(cumulative, self.covbat_cov_thresh) + 1)
+
+        # Determine number of components based on threshold type
+        if isinstance(self.covbat_cov_thresh, int):
+            n_pc = min(self.covbat_cov_thresh, len(pca.explained_variance_ratio_))
+        else:
+            cumulative = np.cumsum(pca.explained_variance_ratio_)
+            n_pc = int(np.searchsorted(cumulative, self.covbat_cov_thresh) + 1)
+
         self._covbat_pca = pca
         self._covbat_n_pc = n_pc
 
@@ -488,7 +490,8 @@ class ComBatModel:
         continuous_covariates: Optional[ArrayLike] = None,
     ) -> pd.DataFrame:
         """Transform the data using fitted ComBat parameters."""
-        check_is_fitted(self, ["_gamma_star"])
+        if not hasattr(self, "_gamma_star"):
+            raise ValueError("This ComBatModel instance is not fitted yet. Call 'fit' before 'transform'.")
         if not isinstance(X, pd.DataFrame):
             X = pd.DataFrame(X)
         idx = X.index
@@ -600,7 +603,7 @@ class ComBatModel:
         """Chen transform implementation."""
         X_meanvar_adj = self._transform_fortin(X, batch, disc, cont)
         X_centered = X_meanvar_adj - self._covbat_pca.mean_
-        scores = self._covbat_pca.transform(X_centered.values)
+        scores = self._covbat_pca.transform(X_centered)
         n_pc = self._covbat_n_pc
         scores_adj = scores.copy()
 
@@ -639,7 +642,7 @@ class ComBat(BaseEstimator, TransformerMixin):
         mean_only: bool = False,
         reference_batch: Optional[str] = None,
         eps: float = 1e-8,
-        covbat_cov_thresh: float = 0.9,
+        covbat_cov_thresh: Union[float, int] = 0.9,
     ) -> None:
         self.batch = batch
         self.discrete_covariates = discrete_covariates
@@ -759,7 +762,8 @@ class ComBat(BaseEstimator, TransformerMixin):
             - `'original'`: embedding of original data
             - `'transformed'`: embedding of ComBat-transformed data
         """
-        check_is_fitted(self._model, ["_gamma_star"])
+        if not hasattr(self._model, "_gamma_star"):
+            raise ValueError("This ComBat instance is not fitted yet. Call 'fit' before 'plot_transformation'.")
 
         if n_components not in [2, 3]:
             raise ValueError(f"n_components must be 2 or 3, got {n_components}")
@@ -767,11 +771,6 @@ class ComBat(BaseEstimator, TransformerMixin):
             raise ValueError(f"reduction_method must be 'pca', 'tsne', or 'umap', got '{reduction_method}'")
         if plot_type not in ['static', 'interactive']:
             raise ValueError(f"plot_type must be 'static' or 'interactive', got '{plot_type}'")
-
-        if reduction_method == 'umap' and not UMAP_AVAILABLE:
-            raise ImportError("UMAP is not installed. Install with: pip install umap-learn")
-        if plot_type == 'interactive' and not PLOTLY_AVAILABLE:
-            raise ImportError("Plotly is not installed. Install with: pip install plotly")
 
         if not isinstance(X, pd.DataFrame):
             X = pd.DataFrame(X)
@@ -797,8 +796,8 @@ class ComBat(BaseEstimator, TransformerMixin):
         else:
             umap_params = {'random_state': 42}
             umap_params.update(reduction_kwargs)
-            reducer_orig = umap.UMAP(n_components=n_components, **reduction_kwargs)
-            reducer_trans = umap.UMAP(n_components=n_components, **reduction_kwargs)
+            reducer_orig = umap.UMAP(n_components=n_components, **umap_params)
+            reducer_trans = umap.UMAP(n_components=n_components, **umap_params)
 
         X_embedded_orig = reducer_orig.fit_transform(X_np)
         X_embedded_trans = reducer_trans.fit_transform(X_trans_np)
@@ -845,9 +844,9 @@ class ComBat(BaseEstimator, TransformerMixin):
         n_batches = len(unique_batches)
 
         if n_batches <= 10:
-            colors = plt.cm.get_cmap(cmap)(np.linspace(0, 1, n_batches))
+            colors = matplotlib.colormaps.get_cmap(cmap)(np.linspace(0, 1, n_batches))
         else:
-            colors = plt.cm.get_cmap('tab20')(np.linspace(0, 1, n_batches))
+            colors = matplotlib.colormaps.get_cmap('tab20')(np.linspace(0, 1, n_batches))
 
         if n_components == 2:
             ax1 = plt.subplot(1, 2, 1)
@@ -956,7 +955,7 @@ class ComBat(BaseEstimator, TransformerMixin):
         unique_batches = batch_labels.drop_duplicates()
 
         n_batches = len(unique_batches)
-        cmap_func = plt.cm.get_cmap(cmap)
+        cmap_func = matplotlib.colormaps.get_cmap(cmap)
         color_list = [mcolors.to_hex(cmap_func(i / max(n_batches - 1, 1))) for i in range(n_batches)]
 
         batch_to_color = dict(zip(unique_batches, color_list))
