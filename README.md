@@ -24,6 +24,17 @@
 pip install combatlearn
 ```
 
+## Documentation
+
+**Full documentation is available at [combatlearn.readthedocs.io](https://combatlearn.readthedocs.io)**
+
+The documentation includes:
+- [Installation Guide](https://combatlearn.readthedocs.io/en/latest/installation/)
+- [Quick Start Tutorial](https://combatlearn.readthedocs.io/en/latest/quickstart/)
+- [User Guide](https://combatlearn.readthedocs.io/en/latest/user-guide/overview/)
+- [API Reference](https://combatlearn.readthedocs.io/en/latest/api/)
+- [Examples](https://combatlearn.readthedocs.io/en/latest/examples/basic-usage/)
+
 ## Quick start
 
 ```python
@@ -71,17 +82,6 @@ print(f"Best CV AUROC: {grid.best_score_:.3f}")
 ```
 
 For a full example of how to use **combatlearn** see the [notebook demo](https://github.com/EttoreRocchi/combatlearn/blob/main/docs/demo/combatlearn_demo.ipynb)
-
-## Documentation
-
-**Full documentation is available at [combatlearn.readthedocs.io](https://combatlearn.readthedocs.io)**
-
-The documentation includes:
-- [Installation Guide](https://combatlearn.readthedocs.io/en/latest/installation/)
-- [Quick Start Tutorial](https://combatlearn.readthedocs.io/en/latest/quickstart/)
-- [User Guide](https://combatlearn.readthedocs.io/en/latest/user-guide/overview/)
-- [API Reference](https://combatlearn.readthedocs.io/en/latest/api/)
-- [Examples](https://combatlearn.readthedocs.io/en/latest/examples/basic-usage/)
 
 ## `ComBat` parameters
 
