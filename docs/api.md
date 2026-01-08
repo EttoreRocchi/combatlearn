@@ -17,6 +17,8 @@ The main scikit-learn compatible transformer for batch effect correction.
         - transform
         - fit_transform
         - plot_transformation
+        - compute_batch_metrics
+        - metrics_
 
 ## Usage Examples
 
@@ -56,6 +58,34 @@ pipe = Pipeline([
 
 pipe.fit(X_train, y_train)
 predictions = pipe.predict(X_test)
+```
+
+### Computing Batch Effect Metrics
+
+```python
+# Option 1: Auto-compute during fit_transform
+combat = ComBat(batch=batch_labels, compute_metrics=True)
+X_corrected = combat.fit_transform(X)
+
+# Access cached metrics
+metrics = combat.metrics_
+
+# View batch effect metrics
+for name, vals in metrics['batch_effect'].items():
+    print(f"{name}: {vals['before']:.3f} -> {vals['after']:.3f}")
+```
+
+```python
+# Option 2: On-demand computation for new data
+combat = ComBat(batch=train_batch)
+combat.fit(X_train)
+
+# Compute metrics on test data with different batch labels
+test_metrics = combat.compute_batch_metrics(
+    X_test,
+    batch=test_batch_labels,
+    k_neighbors=[5, 10, 25]
+)
 ```
 
 ## Method Parameters
@@ -142,6 +172,37 @@ fig = combat.plot_transformation(X)
 
 # Returns figure and embeddings
 fig, embeddings = combat.plot_transformation(X, return_embeddings=True)
+```
+
+### compute_batch_metrics()
+
+Returns `dict` with comprehensive batch effect metrics.
+
+The returned dictionary contains:
+- `batch_effect`: Silhouette, Davies-Bouldin, kBET, LISI, variance ratio (each with `before` and `after` values)
+- `preservation`: k-NN preservation, distance correlation
+- `alignment`: Centroid distance, Levene statistic
+
+```python
+# Compute metrics on fitted model
+metrics = combat.compute_batch_metrics(X)
+
+# View batch effect metrics
+for name, vals in metrics['batch_effect'].items():
+    print(f"{name}: {vals['before']:.3f} -> {vals['after']:.3f}")
+
+# Compute metrics on new data with different batch labels
+test_metrics = combat.compute_batch_metrics(X_test, batch=test_batch_labels)
+```
+
+### metrics_ property
+
+Returns `Optional[dict]` - cached metrics from last `fit_transform()` when `compute_metrics=True`.
+
+```python
+combat = ComBat(batch=batch, compute_metrics=True)
+X_corrected = combat.fit_transform(X)
+print(combat.metrics_)  # Access cached metrics
 ```
 
 ## Exceptions

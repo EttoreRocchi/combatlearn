@@ -197,5 +197,6 @@ plt.savefig('batch_effects_comparison.png', dpi=300)
 
 ## Next Steps
 
+- See [Metrics Guide](metrics.md) for quantitative assessment
 - See complete [Examples](../examples/basic-usage.md)
 - Check [API Reference](../api.md) for all parameters

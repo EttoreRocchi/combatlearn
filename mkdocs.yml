@@ -88,6 +88,7 @@ nav:
     - Parameters: user-guide/parameters.md
     - Cross-Validation: user-guide/cross-validation.md
     - Visualization: user-guide/visualization.md
+    - Metrics: user-guide/metrics.md
   - Examples:
     - Basic Usage: examples/basic-usage.md
     - Grid Search: examples/grid-search.md
