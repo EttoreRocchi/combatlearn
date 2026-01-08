@@ -37,6 +37,8 @@ The documentation includes:
 
 ## Quick start
 
+For more details, see the [Quick Start Tutorial](https://combatlearn.readthedocs.io/en/latest/quickstart/).
+
 ```python
 import pandas as pd
 from sklearn.pipeline import Pipeline
@@ -85,7 +87,7 @@ For a full example of how to use **combatlearn** see the [notebook demo](https:/
 
 ## `ComBat` parameters
 
-The following section provides a detailed explanation of all parameters available in the scikit-learn-compatible `ComBat` class.
+The following section provides a detailed explanation of all parameters available in the scikit-learn-compatible `ComBat` class. For complete API documentation, see the [API Reference](https://combatlearn.readthedocs.io/en/latest/api/).
 
 ### Main Parameters
 
@@ -107,11 +109,17 @@ The following section provides a detailed explanation of all parameters availabl
 | `eps` | float | `1e-8` | Small jitter value added to variances to prevent divide-by-zero errors during standardization. |
 
 
-### Batch Effect Correction Visualization 
+### Batch Effect Correction Visualization
 
 The `plot_transformation` method allows to visualize the **ComBat** transformation effect using dimensionality reduction, showing the before/after comparison of data transformed by `ComBat` using PCA, t-SNE, or UMAP to reduce dimensions for visualization.
 
-For further details see the [notebook demo](https://github.com/EttoreRocchi/combatlearn/blob/main/docs/demo/combatlearn_demo.ipynb).
+For further details see the [Visualization Guide](https://combatlearn.readthedocs.io/en/latest/user-guide/visualization/) and the [notebook demo](https://github.com/EttoreRocchi/combatlearn/blob/main/docs/demo/combatlearn_demo.ipynb).
+
+### Batch Effect Metrics
+
+The `compute_batch_metrics` method provides quantitative assessment of batch correction quality. It computes metrics including Silhouette coefficient, Davies-Bouldin index, kBET, LISI, and variance ratio for batch effect quantification, as well as k-NN preservation and distance correlation for structure preservation.
+
+For further details see the [Metrics Guide](https://combatlearn.readthedocs.io/en/latest/user-guide/metrics/) and the [notebook demo](https://github.com/EttoreRocchi/combatlearn/blob/main/docs/demo/combatlearn_demo.ipynb).
 
 ## Contributing
 
@@ -134,8 +142,7 @@ We gratefully acknowledge:
 
 ## Citation
 
-If **combatlearn** is useful in your research, please cite the original
-papers:
+If **combatlearn** is useful in your research, please cite the original papers:
 
 - Johnson WE, Li C, Rabinovic A. Adjusting batch effects in microarray expression data using empirical Bayes methods. _Biostatistics_. 2007 Jan;8(1):118-27. doi: [10.1093/biostatistics/kxj037](https://doi.org/10.1093/biostatistics/kxj037)
 
