@@ -8,7 +8,7 @@
 [![License](https://img.shields.io/github/license/EttoreRocchi/combatlearn)](https://github.com/EttoreRocchi/combatlearn/blob/main/LICENSE)
 
 <div align="center">
-<p><img src="https://raw.githubusercontent.com/EttoreRocchi/combatlearn/main/docs/logo.png" alt="combatlearn logo" width="350" /></p>
+<p><img src="https://raw.githubusercontent.com/EttoreRocchi/combatlearn/main/docs/source/_static/logo.png" alt="combatlearn logo" width="350" /></p>
 </div>
 
 **combatlearn** makes the popular _ComBat_ (and _CovBat_) batch-effect correction algorithm available for use into machine learning frameworks. It lets you harmonise high-dimensional data inside a scikit-learn `Pipeline`, so that cross-validation and grid-search automatically take batch structure into account, **without data leakage**.
@@ -29,15 +29,10 @@ pip install combatlearn
 **Full documentation is available at [combatlearn.readthedocs.io](https://combatlearn.readthedocs.io)**
 
 The documentation includes:
-- [Installation Guide](https://combatlearn.readthedocs.io/en/latest/installation/)
-- [Quick Start Tutorial](https://combatlearn.readthedocs.io/en/latest/quickstart/)
-- [User Guide](https://combatlearn.readthedocs.io/en/latest/user-guide/overview/)
+- [Methods Guide](https://combatlearn.readthedocs.io/en/latest/methods/)
 - [API Reference](https://combatlearn.readthedocs.io/en/latest/api/)
-- [Examples](https://combatlearn.readthedocs.io/en/latest/examples/basic-usage/)
 
 ## Quick start
-
-For more details, see the [Quick Start Tutorial](https://combatlearn.readthedocs.io/en/latest/quickstart/).
 
 ```python
 import pandas as pd
@@ -83,7 +78,7 @@ print("Best parameters:", grid.best_params_)
 print(f"Best CV AUROC: {grid.best_score_:.3f}")
 ```
 
-For a full example of how to use **combatlearn** see the [notebook demo](https://github.com/EttoreRocchi/combatlearn/blob/main/docs/demo/combatlearn_demo.ipynb)
+For a full example of how to use **combatlearn** see the [notebook demo](https://github.com/EttoreRocchi/combatlearn/blob/main/docs/source/demo/combatlearn_demo.ipynb)
 
 ## `ComBat` parameters
 
@@ -113,13 +108,13 @@ The following section provides a detailed explanation of all parameters availabl
 
 The `plot_transformation` method allows to visualize the **ComBat** transformation effect using dimensionality reduction, showing the before/after comparison of data transformed by `ComBat` using PCA, t-SNE, or UMAP to reduce dimensions for visualization.
 
-For further details see the [Visualization Guide](https://combatlearn.readthedocs.io/en/latest/user-guide/visualization/) and the [notebook demo](https://github.com/EttoreRocchi/combatlearn/blob/main/docs/demo/combatlearn_demo.ipynb).
+For further details see the [API Reference](https://combatlearn.readthedocs.io/en/latest/api/) and the [notebook demo](https://github.com/EttoreRocchi/combatlearn/blob/main/docs/source/demo/combatlearn_demo.ipynb).
 
 ### Batch Effect Metrics
 
 The `compute_batch_metrics` method provides quantitative assessment of batch correction quality. It computes metrics including Silhouette coefficient, Davies-Bouldin index, kBET, LISI, and variance ratio for batch effect quantification, as well as k-NN preservation and distance correlation for structure preservation.
 
-For further details see the [Metrics Guide](https://combatlearn.readthedocs.io/en/latest/user-guide/metrics/) and the [notebook demo](https://github.com/EttoreRocchi/combatlearn/blob/main/docs/demo/combatlearn_demo.ipynb).
+For further details see the [API Reference](https://combatlearn.readthedocs.io/en/latest/api/) and the [notebook demo](https://github.com/EttoreRocchi/combatlearn/blob/main/docs/source/demo/combatlearn_demo.ipynb).
 
 ## Contributing
 

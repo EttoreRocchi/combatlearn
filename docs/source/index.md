@@ -108,6 +108,5 @@ MIT License - see [LICENSE](https://github.com/EttoreRocchi/combatlearn/blob/mai
 
 methods
 api
-demo/combatlearn_demo
 contributing
 ```
