@@ -180,19 +180,18 @@ mypy combatlearn
 
 ### Improving The Documentation
 
-Documentation is built with MkDocs. To preview docs locally:
+Documentation is built with Sphinx. To preview docs locally:
 
 ```bash
 pip install -e ".[docs]"
-mkdocs serve
+cd docs && make html
 ```
 
-Then visit `http://127.0.0.1:8000`
+Then open `_build/html/index.html`
 
 To contribute to documentation:
-- Update relevant `.md` files in the `docs/` directory
+- Update relevant files in the `docs/source/` directory
 - Ensure links work correctly
-- Add examples where appropriate
 - Test the documentation locally before submitting
 
 ## Styleguides

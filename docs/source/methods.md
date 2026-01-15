@@ -218,6 +218,4 @@ Samples in the reference batch remain unchanged after correction.
 
 ## Next Steps
 
-- Learn about [Parameters](parameters.md)
-- See [Cross-Validation](cross-validation.md) guide
-- Try [Examples](../examples/basic-usage.md)
+- See the [API Reference](api.rst) for complete parameter documentation

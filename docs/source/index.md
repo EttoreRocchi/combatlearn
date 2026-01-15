@@ -5,31 +5,30 @@
 [![License](https://img.shields.io/github/license/EttoreRocchi/combatlearn)](https://github.com/EttoreRocchi/combatlearn/blob/main/LICENSE)
 [![Test](https://github.com/EttoreRocchi/combatlearn/actions/workflows/test.yaml/badge.svg)](https://github.com/EttoreRocchi/combatlearn/actions/workflows/test.yaml)
 
-<div align="center">
-<img src="logo.png" alt="combatlearn logo" width="350"/>
-</div>
+```{image} _static/logo.png
+:alt: combatlearn logo
+:width: 350px
+:align: center
+```
 
 **combatlearn** makes the popular _ComBat_ (and _CovBat_) batch-effect correction algorithm available for use in machine learning frameworks. It lets you harmonize high-dimensional data inside a scikit-learn `Pipeline`, so that cross-validation and grid-search automatically take batch structure into account, **without data leakage**.
 
 ## Features
 
-✨ **Three ComBat Methods**:
+- **Three ComBat Methods**:
+  - `method="johnson"` - Classic ComBat (Johnson et al., 2007)
+  - `method="fortin"` - neuroCombat with covariates (Fortin et al., 2018)
+  - `method="chen"` - CovBat PCA-based (Chen et al., 2022)
 
-- `method="johnson"` - Classic ComBat (Johnson et al., 2007)
-- `method="fortin"` - neuroCombat with covariates (Fortin et al., 2018)
-- `method="chen"` - CovBat PCA-based (Chen et al., 2022)
+- **Scikit-learn Compatible**:
+  - Works seamlessly in `Pipeline` objects
+  - Compatible with `GridSearchCV` and `cross_val_score`
+  - Prevents data leakage during cross-validation
 
-🔧 **Scikit-learn Compatible**:
-
-- Works seamlessly in `Pipeline` objects
-- Compatible with `GridSearchCV` and `cross_val_score`
-- Prevents data leakage during cross-validation
-
-📊 **Visualization Tools**:
-
-- Built-in plotting with PCA, t-SNE, and UMAP
-- Static (matplotlib) and interactive (plotly) visualizations
-- Before/after batch effect comparison
+- **Visualization Tools**:
+  - Built-in plotting with PCA, t-SNE, and UMAP
+  - Static (matplotlib) and interactive (plotly) visualizations
+  - Before/after batch effect comparison
 
 ## Quick Example
 
@@ -82,14 +81,6 @@ Batch effects are systematic technical variations that can confound biological s
 pip install combatlearn
 ```
 
-## Getting Started
-
-- [Installation Guide](installation.md)
-- [Quick Start Tutorial](quickstart.md)
-- [User Guide](user-guide/overview.md)
-- [API Reference](api.md)
-- [Examples](examples/basic-usage.md)
-
 ## Citation
 
 If combatlearn is useful in your research, please cite the original ComBat papers:
@@ -109,3 +100,14 @@ If combatlearn is useful in your research, please cite the original ComBat paper
 ## License
 
 MIT License - see [LICENSE](https://github.com/EttoreRocchi/combatlearn/blob/main/LICENSE) for details.
+
+```{toctree}
+:maxdepth: 2
+:caption: Documentation
+:hidden:
+
+methods
+api
+demo/combatlearn_demo
+contributing
+```
