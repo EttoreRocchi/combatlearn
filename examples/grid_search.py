@@ -8,11 +8,12 @@ including ComBat-specific parameters alongside classifier parameters.
 
 import numpy as np
 import pandas as pd
+from sklearn.datasets import make_classification
 from sklearn.model_selection import GridSearchCV, StratifiedKFold
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.svm import SVC
-from sklearn.datasets import make_classification
+
 from combatlearn import ComBat
 
 # Set random seed
@@ -25,7 +26,7 @@ X, y = make_classification(
     n_informative=20,
     n_redundant=5,
     n_classes=2,
-    random_state=42
+    random_state=42,
 )
 
 # Add batch effects
@@ -52,15 +53,13 @@ print(f"Classes: {np.bincount(y)}")
 print(f"Batches: {batch.value_counts().to_dict()}")
 
 # Create pipeline
-pipeline = Pipeline([
-    ("combat", ComBat(
-        batch=batch,
-        method="fortin",
-        continuous_covariates=age
-    )),
-    ("scaler", StandardScaler()),
-    ("classifier", SVC(random_state=42))
-])
+pipeline = Pipeline(
+    [
+        ("combat", ComBat(batch=batch, method="fortin", continuous_covariates=age)),
+        ("scaler", StandardScaler()),
+        ("classifier", SVC(random_state=42)),
+    ]
+)
 
 # Define parameter grid
 # Note: Combat parameters are prefixed with "combat__"
@@ -84,11 +83,11 @@ print(f"  - C: {param_grid['classifier__C']}")
 print(f"  - kernel: {param_grid['classifier__kernel']}")
 
 total_combinations = (
-    len(param_grid["combat__method"]) *
-    len(param_grid["combat__parametric"]) *
-    len(param_grid["combat__mean_only"]) *
-    len(param_grid["classifier__C"]) *
-    len(param_grid["classifier__kernel"])
+    len(param_grid["combat__method"])
+    * len(param_grid["combat__parametric"])
+    * len(param_grid["combat__mean_only"])
+    * len(param_grid["classifier__C"])
+    * len(param_grid["classifier__kernel"])
 )
 print(f"\nTotal parameter combinations: {total_combinations}")
 
@@ -105,7 +104,7 @@ grid_search = GridSearchCV(
     cv=cv,
     scoring="accuracy",
     n_jobs=-1,
-    verbose=1
+    verbose=1,
 )
 
 grid_search.fit(X, y)
@@ -127,7 +126,7 @@ print("=" * 70)
 results = pd.DataFrame(grid_search.cv_results_)
 results = results.sort_values("rank_test_score")
 
-for idx, (i, row) in enumerate(results.head(5).iterrows(), 1):
+for idx, (_i, row) in enumerate(results.head(5).iterrows(), 1):
     print(f"\n{idx}. Score: {row['mean_test_score']:.4f} (+/- {row['std_test_score']:.4f})")
     print(f"   Parameters: {row['params']}")
 
@@ -142,12 +141,16 @@ print("\nBy method:")
 print(method_scores)
 
 # Group by parametric
-parametric_scores = results.groupby("param_combat__parametric")["mean_test_score"].agg(["mean", "std"])
+parametric_scores = results.groupby("param_combat__parametric")["mean_test_score"].agg(
+    ["mean", "std"]
+)
 print("\nBy parametric:")
 print(parametric_scores)
 
 # Group by mean_only
-mean_only_scores = results.groupby("param_combat__mean_only")["mean_test_score"].agg(["mean", "std"])
+mean_only_scores = results.groupby("param_combat__mean_only")["mean_test_score"].agg(
+    ["mean", "std"]
+)
 print("\nBy mean_only:")
 print(mean_only_scores)
 

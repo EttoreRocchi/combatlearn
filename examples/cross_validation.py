@@ -11,11 +11,12 @@ then applied to both training and test sets during each CV fold.
 
 import numpy as np
 import pandas as pd
-from sklearn.model_selection import cross_val_score, StratifiedKFold
+from sklearn.datasets import make_classification
+from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import StratifiedKFold, cross_val_score
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
-from sklearn.linear_model import LogisticRegression
-from sklearn.datasets import make_classification
+
 from combatlearn import ComBat
 
 # Set random seed
@@ -28,7 +29,7 @@ X, y = make_classification(
     n_informative=30,
     n_redundant=10,
     n_classes=2,
-    random_state=42
+    random_state=42,
 )
 
 # Add batch effects
@@ -58,15 +59,15 @@ print("\n" + "=" * 70)
 print("1. Baseline: No Batch Correction")
 print("=" * 70)
 
-pipeline_baseline = Pipeline([
-    ("scaler", StandardScaler()),
-    ("classifier", LogisticRegression(max_iter=1000, random_state=42))
-])
+pipeline_baseline = Pipeline(
+    [
+        ("scaler", StandardScaler()),
+        ("classifier", LogisticRegression(max_iter=1000, random_state=42)),
+    ]
+)
 
 cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
-scores_baseline = cross_val_score(
-    pipeline_baseline, X, y, cv=cv, scoring="roc_auc"
-)
+scores_baseline = cross_val_score(pipeline_baseline, X, y, cv=cv, scoring="roc_auc")
 
 print(f"Cross-validated ROC-AUC scores: {scores_baseline}")
 print(f"Mean ROC-AUC: {scores_baseline.mean():.4f} (+/- {scores_baseline.std():.4f})")
@@ -76,15 +77,15 @@ print("\n" + "=" * 70)
 print("2. With ComBat Batch Correction (Johnson Method)")
 print("=" * 70)
 
-pipeline_combat = Pipeline([
-    ("combat", ComBat(batch=batch, method="johnson")),
-    ("scaler", StandardScaler()),
-    ("classifier", LogisticRegression(max_iter=1000, random_state=42))
-])
-
-scores_combat = cross_val_score(
-    pipeline_combat, X, y, cv=cv, scoring="roc_auc"
+pipeline_combat = Pipeline(
+    [
+        ("combat", ComBat(batch=batch, method="johnson")),
+        ("scaler", StandardScaler()),
+        ("classifier", LogisticRegression(max_iter=1000, random_state=42)),
+    ]
 )
+
+scores_combat = cross_val_score(pipeline_combat, X, y, cv=cv, scoring="roc_auc")
 
 print(f"Cross-validated ROC-AUC scores: {scores_combat}")
 print(f"Mean ROC-AUC: {scores_combat.mean():.4f} (+/- {scores_combat.std():.4f})")
@@ -96,25 +97,25 @@ print("=" * 70)
 
 # Add synthetic covariates
 age = pd.DataFrame({"age": np.random.normal(50, 12, len(X))}, index=X.index)
-site = pd.DataFrame(
-    {"site": np.random.choice(["Site_A", "Site_B"], len(X))},
-    index=X.index
+site = pd.DataFrame({"site": np.random.choice(["Site_A", "Site_B"], len(X))}, index=X.index)
+
+pipeline_combat_cov = Pipeline(
+    [
+        (
+            "combat",
+            ComBat(
+                batch=batch,
+                method="fortin",
+                continuous_covariates=age,
+                discrete_covariates=site,
+            ),
+        ),
+        ("scaler", StandardScaler()),
+        ("classifier", LogisticRegression(max_iter=1000, random_state=42)),
+    ]
 )
 
-pipeline_combat_cov = Pipeline([
-    ("combat", ComBat(
-        batch=batch,
-        method="fortin",
-        continuous_covariates=age,
-        discrete_covariates=site
-    )),
-    ("scaler", StandardScaler()),
-    ("classifier", LogisticRegression(max_iter=1000, random_state=42))
-])
-
-scores_combat_cov = cross_val_score(
-    pipeline_combat_cov, X, y, cv=cv, scoring="roc_auc"
-)
+scores_combat_cov = cross_val_score(pipeline_combat_cov, X, y, cv=cv, scoring="roc_auc")
 
 print(f"Cross-validated ROC-AUC scores: {scores_combat_cov}")
 print(f"Mean ROC-AUC: {scores_combat_cov.mean():.4f} (+/- {scores_combat_cov.std():.4f})")
@@ -123,14 +124,20 @@ print(f"Mean ROC-AUC: {scores_combat_cov.mean():.4f} (+/- {scores_combat_cov.std
 print("\n" + "=" * 70)
 print("Summary: Performance Comparison")
 print("=" * 70)
-print(f"Baseline (no correction):     {scores_baseline.mean():.4f} (+/- {scores_baseline.std():.4f})")
+print(
+    f"Baseline (no correction):     {scores_baseline.mean():.4f} (+/- {scores_baseline.std():.4f})"
+)
 print(f"ComBat (Johnson):             {scores_combat.mean():.4f} (+/- {scores_combat.std():.4f})")
-print(f"ComBat (Fortin w/ covariates):{scores_combat_cov.mean():.4f} (+/- {scores_combat_cov.std():.4f})")
+print(
+    f"ComBat (Fortin w/ covariates):{scores_combat_cov.mean():.4f} (+/- {scores_combat_cov.std():.4f})"
+)
 
 improvement_johnson = (scores_combat.mean() - scores_baseline.mean()) / scores_baseline.mean() * 100
-improvement_fortin = (scores_combat_cov.mean() - scores_baseline.mean()) / scores_baseline.mean() * 100
+improvement_fortin = (
+    (scores_combat_cov.mean() - scores_baseline.mean()) / scores_baseline.mean() * 100
+)
 
-print(f"\nImprovement over baseline:")
+print("\nImprovement over baseline:")
 print(f"  Johnson method: {improvement_johnson:+.2f}%")
 print(f"  Fortin method:  {improvement_fortin:+.2f}%")
 

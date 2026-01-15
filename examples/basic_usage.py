@@ -8,6 +8,7 @@ using all three available methods: Johnson, Fortin, and Chen.
 
 import numpy as np
 import pandas as pd
+
 from combatlearn import ComBat
 
 # Set random seed for reproducibility
@@ -47,9 +48,13 @@ combat_johnson = ComBat(batch=batch, method="johnson")
 X_corrected_johnson = combat_johnson.fit_transform(X)
 
 print(f"Original data mean (Batch A): {X.loc[batch == 'Batch_A'].mean().mean():.3f}")
-print(f"Corrected data mean (Batch A): {X_corrected_johnson.loc[batch == 'Batch_A'].mean().mean():.3f}")
+print(
+    f"Corrected data mean (Batch A): {X_corrected_johnson.loc[batch == 'Batch_A'].mean().mean():.3f}"
+)
 print(f"Original data mean (Batch B): {X.loc[batch == 'Batch_B'].mean().mean():.3f}")
-print(f"Corrected data mean (Batch B): {X_corrected_johnson.loc[batch == 'Batch_B'].mean().mean():.3f}")
+print(
+    f"Corrected data mean (Batch B): {X_corrected_johnson.loc[batch == 'Batch_B'].mean().mean():.3f}"
+)
 
 # Example 2: Fortin method (with covariates)
 print("\n" + "=" * 60)
@@ -57,19 +62,17 @@ print("2. Fortin Method (neuroCombat with Covariates)")
 print("=" * 60)
 
 # Add covariates
-age = pd.DataFrame({
-    "age": np.random.normal(50, 10, n_samples)
-}, index=X.index)
+age = pd.DataFrame({"age": np.random.normal(50, 10, n_samples)}, index=X.index)
 
-diagnosis = pd.DataFrame({
-    "diagnosis": np.random.choice(["healthy", "disease"], n_samples)
-}, index=X.index)
+diagnosis = pd.DataFrame(
+    {"diagnosis": np.random.choice(["healthy", "disease"], n_samples)}, index=X.index
+)
 
 combat_fortin = ComBat(
     batch=batch,
     method="fortin",
     continuous_covariates=age,
-    discrete_covariates=diagnosis
+    discrete_covariates=diagnosis,
 )
 X_corrected_fortin = combat_fortin.fit_transform(X)
 
@@ -88,7 +91,7 @@ combat_chen = ComBat(
     method="chen",
     continuous_covariates=age,
     discrete_covariates=diagnosis,
-    covbat_cov_thresh=0.95  # Retain 95% of variance
+    covbat_cov_thresh=0.95,  # Retain 95% of variance
 )
 X_corrected_chen = combat_chen.fit_transform(X)
 
@@ -106,8 +109,12 @@ X_corrected_mean_only = combat_mean_only.fit_transform(X)
 
 print("Mean-only mode: Only batch mean is corrected, variance is preserved")
 print(f"Original variance (Batch A): {X.loc[batch == 'Batch_A'].var().mean():.3f}")
-print(f"Corrected variance (Batch A, mean_only=True): {X_corrected_mean_only.loc[batch == 'Batch_A'].var().mean():.3f}")
-print(f"Corrected variance (Batch A, mean_only=False): {X_corrected_johnson.loc[batch == 'Batch_A'].var().mean():.3f}")
+print(
+    f"Corrected variance (Batch A, mean_only=True): {X_corrected_mean_only.loc[batch == 'Batch_A'].var().mean():.3f}"
+)
+print(
+    f"Corrected variance (Batch A, mean_only=False): {X_corrected_johnson.loc[batch == 'Batch_A'].var().mean():.3f}"
+)
 
 print("\n" + "=" * 60)
 print("Example completed successfully!")

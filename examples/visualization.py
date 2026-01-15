@@ -6,9 +6,10 @@ This example demonstrates how to visualize batch effects before and after
 ComBat correction using the built-in plot_transformation method.
 """
 
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
+
 from combatlearn import ComBat
 
 # Set random seed
@@ -52,16 +53,16 @@ print("=" * 70)
 
 fig = combat.plot_transformation(
     X,
-    reduction_method='pca',
+    reduction_method="pca",
     n_components=2,
-    plot_type='static',
+    plot_type="static",
     figsize=(14, 6),
     alpha=0.7,
     point_size=60,
-    cmap='Set2',
-    title='ComBat Correction Effect - 2D PCA'
+    cmap="Set2",
+    title="ComBat Correction Effect - 2D PCA",
 )
-plt.savefig('combat_2d_pca.png', dpi=300, bbox_inches='tight')
+plt.savefig("combat_2d_pca.png", dpi=300, bbox_inches="tight")
 print("Saved: combat_2d_pca.png")
 plt.close()
 
@@ -72,16 +73,16 @@ print("=" * 70)
 
 fig = combat.plot_transformation(
     X,
-    reduction_method='pca',
+    reduction_method="pca",
     n_components=3,
-    plot_type='static',
+    plot_type="static",
     figsize=(14, 6),
     alpha=0.6,
     point_size=40,
-    cmap='tab10',
-    title='ComBat Correction Effect - 3D PCA'
+    cmap="tab10",
+    title="ComBat Correction Effect - 3D PCA",
 )
-plt.savefig('combat_3d_pca.png', dpi=300, bbox_inches='tight')
+plt.savefig("combat_3d_pca.png", dpi=300, bbox_inches="tight")
 print("Saved: combat_3d_pca.png")
 plt.close()
 
@@ -92,15 +93,15 @@ print("=" * 70)
 
 fig = combat.plot_transformation(
     X,
-    reduction_method='tsne',
+    reduction_method="tsne",
     n_components=2,
-    plot_type='static',
+    plot_type="static",
     figsize=(14, 6),
     alpha=0.7,
     point_size=60,
-    perplexity=40  # t-SNE specific parameter
+    perplexity=40,  # t-SNE specific parameter
 )
-plt.savefig('combat_tsne.png', dpi=300, bbox_inches='tight')
+plt.savefig("combat_tsne.png", dpi=300, bbox_inches="tight")
 print("Saved: combat_tsne.png")
 plt.close()
 
@@ -111,10 +112,10 @@ print("=" * 70)
 
 fig, embeddings = combat.plot_transformation(
     X,
-    reduction_method='pca',
+    reduction_method="pca",
     n_components=2,
-    plot_type='static',
-    return_embeddings=True
+    plot_type="static",
+    return_embeddings=True,
 )
 plt.close()
 
@@ -125,42 +126,42 @@ fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
 for batch_name in batch.unique():
     mask = batch == batch_name
     ax1.scatter(
-        embeddings['original'][mask, 0],
-        embeddings['original'][mask, 1],
+        embeddings["original"][mask, 0],
+        embeddings["original"][mask, 1],
         label=batch_name,
         alpha=0.7,
         s=60,
-        edgecolors='black',
-        linewidth=0.5
+        edgecolors="black",
+        linewidth=0.5,
     )
 
-ax1.set_title('Before ComBat (Custom Plot)', fontsize=12, fontweight='bold')
-ax1.set_xlabel('PC1')
-ax1.set_ylabel('PC2')
-ax1.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+ax1.set_title("Before ComBat (Custom Plot)", fontsize=12, fontweight="bold")
+ax1.set_xlabel("PC1")
+ax1.set_ylabel("PC2")
+ax1.legend(bbox_to_anchor=(1.05, 1), loc="upper left")
 ax1.grid(True, alpha=0.3)
 
 # Plot corrected
 for batch_name in batch.unique():
     mask = batch == batch_name
     ax2.scatter(
-        embeddings['transformed'][mask, 0],
-        embeddings['transformed'][mask, 1],
+        embeddings["transformed"][mask, 0],
+        embeddings["transformed"][mask, 1],
         label=batch_name,
         alpha=0.7,
         s=60,
-        edgecolors='black',
-        linewidth=0.5
+        edgecolors="black",
+        linewidth=0.5,
     )
 
-ax2.set_title('After ComBat (Custom Plot)', fontsize=12, fontweight='bold')
-ax2.set_xlabel('PC1')
-ax2.set_ylabel('PC2')
-ax2.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+ax2.set_title("After ComBat (Custom Plot)", fontsize=12, fontweight="bold")
+ax2.set_xlabel("PC1")
+ax2.set_ylabel("PC2")
+ax2.legend(bbox_to_anchor=(1.05, 1), loc="upper left")
 ax2.grid(True, alpha=0.3)
 
 plt.tight_layout()
-plt.savefig('combat_custom_plot.png', dpi=300, bbox_inches='tight')
+plt.savefig("combat_custom_plot.png", dpi=300, bbox_inches="tight")
 print("Saved: combat_custom_plot.png")
 plt.close()
 
@@ -171,12 +172,12 @@ print("=" * 70)
 
 fig = combat.plot_transformation(
     X,
-    reduction_method='pca',
+    reduction_method="pca",
     n_components=2,
-    plot_type='interactive',
-    title='ComBat Correction - Interactive'
+    plot_type="interactive",
+    title="ComBat Correction - Interactive",
 )
-fig.write_html('combat_interactive.html')
+fig.write_html("combat_interactive.html")
 print("Saved: combat_interactive.html")
 print("Open this file in a web browser for interactive exploration!")
 

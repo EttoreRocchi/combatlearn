@@ -8,36 +8,39 @@
 `ComBat` makes the model compatible with scikit-learn by stashing
 the batch (and optional covariates) at construction.
 """
+
 from __future__ import annotations
 
+import warnings
+from typing import Any, Literal
+
+import matplotlib
+import matplotlib.colors as mcolors
+import matplotlib.pyplot as plt
 import numpy as np
 import numpy.linalg as la
+import numpy.typing as npt
 import pandas as pd
+import plotly.graph_objects as go
+import umap
+from plotly.subplots import make_subplots
+from scipy.spatial.distance import pdist
+from scipy.stats import chi2, levene, spearmanr
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
+from sklearn.metrics import davies_bouldin_score, silhouette_score
 from sklearn.neighbors import NearestNeighbors
-from sklearn.metrics import silhouette_score, davies_bouldin_score
-from scipy.stats import levene, spearmanr, chi2
-from scipy.spatial.distance import pdist
-import matplotlib
-import matplotlib.pyplot as plt
-import matplotlib.colors as mcolors
-from typing import Literal, Optional, Union, Dict, Tuple, Any, List
-import numpy.typing as npt
-import warnings
-import umap
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 
-ArrayLike = Union[pd.DataFrame, pd.Series, npt.NDArray[Any]]
+ArrayLike = pd.DataFrame | pd.Series | npt.NDArray[Any]
 FloatArray = npt.NDArray[np.float64]
+
 
 def _compute_pca_embedding(
     X_before: np.ndarray,
     X_after: np.ndarray,
     n_components: int,
-) -> Tuple[np.ndarray, np.ndarray, PCA]:
+) -> tuple[np.ndarray, np.ndarray, PCA]:
     """
     Compute PCA embeddings for both datasets.
 
@@ -91,7 +94,7 @@ def _silhouette_batch(X: np.ndarray, batch_labels: np.ndarray) -> float:
     if len(unique_batches) < 2:
         return 0.0
     try:
-        return silhouette_score(X, batch_labels, metric='euclidean')
+        return silhouette_score(X, batch_labels, metric="euclidean")
     except Exception:
         return 0.0
 
@@ -129,7 +132,7 @@ def _kbet_score(
     batch_labels: np.ndarray,
     k0: int,
     alpha: float = 0.05,
-) -> Tuple[float, float]:
+) -> tuple[float, float]:
     """
     Compute kBET (k-nearest neighbor Batch Effect Test) acceptance rate.
 
@@ -166,7 +169,7 @@ def _kbet_score(
     global_freq = batch_counts / n_samples
     k0 = min(k0, n_samples - 1)
 
-    nn = NearestNeighbors(n_neighbors=k0 + 1, algorithm='auto')
+    nn = NearestNeighbors(n_neighbors=k0 + 1, algorithm="auto")
     nn.fit(X)
     _, indices = nn.kneighbors(X)
 
@@ -175,7 +178,7 @@ def _kbet_score(
     batch_to_idx = {b: i for i, b in enumerate(unique_batches)}
 
     for i in range(n_samples):
-        neighbors = indices[i, 1:k0+1]
+        neighbors = indices[i, 1 : k0 + 1]
         neighbor_batches = batch_labels[neighbors]
 
         observed = np.zeros(n_batches)
@@ -188,7 +191,7 @@ def _kbet_score(
         if mask.sum() < 2:
             continue
 
-        stat = np.sum((observed[mask] - expected[mask])**2 / expected[mask])
+        stat = np.sum((observed[mask] - expected[mask]) ** 2 / expected[mask])
         df = max(1, mask.sum() - 1)
         p_val = 1 - chi2.cdf(stat, df)
 
@@ -230,7 +233,7 @@ def _find_sigma(distances: np.ndarray, target_perplexity: float, tol: float = 1e
     sigma = 1.0
 
     for _ in range(50):
-        P = np.exp(-distances**2 / (2 * sigma**2 + 1e-10))
+        P = np.exp(-(distances**2) / (2 * sigma**2 + 1e-10))
         P_sum = P.sum()
         if P_sum < 1e-10:
             sigma = (sigma + sigma_max) / 2
@@ -241,7 +244,7 @@ def _find_sigma(distances: np.ndarray, target_perplexity: float, tol: float = 1e
 
         if abs(H - target_H) < tol:
             break
-        elif H < target_H:
+        elif target_H > H:
             sigma_min = sigma
         else:
             sigma_max = sigma
@@ -287,7 +290,7 @@ def _lisi_score(
 
     k = min(3 * perplexity, n_samples - 1)
 
-    nn = NearestNeighbors(n_neighbors=k + 1, algorithm='auto')
+    nn = NearestNeighbors(n_neighbors=k + 1, algorithm="auto")
     nn.fit(X)
     distances, indices = nn.kneighbors(X)
 
@@ -299,7 +302,7 @@ def _lisi_score(
     for i in range(n_samples):
         sigma = _find_sigma(distances[i], perplexity)
 
-        P = np.exp(-distances[i]**2 / (2 * sigma**2 + 1e-10))
+        P = np.exp(-(distances[i] ** 2) / (2 * sigma**2 + 1e-10))
         P_sum = P.sum()
         if P_sum < 1e-10:
             lisi_values.append(1.0)
@@ -312,10 +315,7 @@ def _lisi_score(
             batch_probs[batch_to_idx[nb]] += P[j]
 
         simpson = np.sum(batch_probs**2)
-        if simpson < 1e-10:
-            lisi = n_batches
-        else:
-            lisi = 1.0 / simpson
+        lisi = n_batches if simpson < 1e-10 else 1.0 / simpson
         lisi_values.append(lisi)
 
     return np.mean(lisi_values)
@@ -358,11 +358,11 @@ def _variance_ratio(X: np.ndarray, batch_labels: np.ndarray) -> float:
         X_batch = X[mask]
         batch_mean = np.mean(X_batch, axis=0)
 
-        between_var += n_b * np.sum((batch_mean - grand_mean)**2)
-        within_var += np.sum((X_batch - batch_mean)**2)
+        between_var += n_b * np.sum((batch_mean - grand_mean) ** 2)
+        within_var += np.sum((X_batch - batch_mean) ** 2)
 
-    between_var /= (n_batches - 1)
-    within_var /= (n_samples - n_batches)
+    between_var /= n_batches - 1
+    within_var /= n_samples - n_batches
 
     if within_var < 1e-10:
         return 0.0
@@ -373,9 +373,9 @@ def _variance_ratio(X: np.ndarray, batch_labels: np.ndarray) -> float:
 def _knn_preservation(
     X_before: np.ndarray,
     X_after: np.ndarray,
-    k_values: List[int],
+    k_values: list[int],
     n_jobs: int = 1,
-) -> Dict[int, float]:
+) -> dict[int, float]:
     """
     Compute fraction of k-nearest neighbors preserved after correction.
 
@@ -402,11 +402,11 @@ def _knn_preservation(
     max_k = max(k_values)
     max_k = min(max_k, X_before.shape[0] - 1)
 
-    nn_before = NearestNeighbors(n_neighbors=max_k + 1, algorithm='auto', n_jobs=n_jobs)
+    nn_before = NearestNeighbors(n_neighbors=max_k + 1, algorithm="auto", n_jobs=n_jobs)
     nn_before.fit(X_before)
     _, indices_before = nn_before.kneighbors(X_before)
 
-    nn_after = NearestNeighbors(n_neighbors=max_k + 1, algorithm='auto', n_jobs=n_jobs)
+    nn_after = NearestNeighbors(n_neighbors=max_k + 1, algorithm="auto", n_jobs=n_jobs)
     nn_after.fit(X_after)
     _, indices_after = nn_after.kneighbors(X_after)
 
@@ -417,8 +417,8 @@ def _knn_preservation(
 
         overlaps = []
         for i in range(X_before.shape[0]):
-            neighbors_before = set(indices_before[i, 1:k+1])
-            neighbors_after = set(indices_after[i, 1:k+1])
+            neighbors_before = set(indices_before[i, 1 : k + 1])
+            neighbors_after = set(indices_after[i, 1 : k + 1])
             overlap = len(neighbors_before & neighbors_after) / k
             overlaps.append(overlap)
 
@@ -463,8 +463,8 @@ def _pairwise_distance_correlation(
         X_before = X_before[idx]
         X_after = X_after[idx]
 
-    dist_before = pdist(X_before, metric='euclidean')
-    dist_after = pdist(X_after, metric='euclidean')
+    dist_before = pdist(X_before, metric="euclidean")
+    dist_after = pdist(X_after, metric="euclidean")
 
     if len(dist_before) == 0:
         return 1.0
@@ -508,7 +508,7 @@ def _mean_centroid_distance(X: np.ndarray, batch_labels: np.ndarray) -> float:
         centroids.append(centroid)
 
     centroids = np.array(centroids)
-    distances = pdist(centroids, metric='euclidean')
+    distances = pdist(centroids, metric="euclidean")
 
     return np.mean(distances)
 
@@ -542,7 +542,7 @@ def _levene_median_statistic(X: np.ndarray, batch_labels: np.ndarray) -> float:
         if len(groups) < 2:
             continue
         try:
-            stat, _ = levene(*groups, center='median')
+            stat, _ = levene(*groups, center="median")
             if not np.isnan(stat):
                 levene_stats.append(stat)
         except Exception:
@@ -583,24 +583,24 @@ class ComBatModel:
         method: Literal["johnson", "fortin", "chen"] = "johnson",
         parametric: bool = True,
         mean_only: bool = False,
-        reference_batch: Optional[str] = None,
+        reference_batch: str | None = None,
         eps: float = 1e-8,
-        covbat_cov_thresh: Union[float, int] = 0.9,
+        covbat_cov_thresh: float | int = 0.9,
     ) -> None:
         self.method: str = method
         self.parametric: bool = parametric
         self.mean_only: bool = bool(mean_only)
-        self.reference_batch: Optional[str] = reference_batch
+        self.reference_batch: str | None = reference_batch
         self.eps: float = float(eps)
-        self.covbat_cov_thresh: Union[float, int] = covbat_cov_thresh
+        self.covbat_cov_thresh: float | int = covbat_cov_thresh
 
         self._batch_levels: pd.Index
         self._grand_mean: pd.Series
         self._pooled_var: pd.Series
         self._gamma_star: FloatArray
         self._delta_star: FloatArray
-        self._n_per_batch: Dict[str, int]
-        self._reference_batch_idx: Optional[int]
+        self._n_per_batch: dict[str, int]
+        self._reference_batch_idx: int | None
         self._beta_hat_nonbatch: FloatArray
         self._n_batch: int
         self._p_design: int
@@ -621,26 +621,15 @@ class ComBatModel:
             raise TypeError("covbat_cov_thresh must be float or int.")
 
     @staticmethod
-    def _as_series(
-        arr: ArrayLike,
-        index: pd.Index,
-        name: str
-    ) -> pd.Series:
+    def _as_series(arr: ArrayLike, index: pd.Index, name: str) -> pd.Series:
         """Convert array-like to categorical Series with validation."""
-        if isinstance(arr, pd.Series):
-            ser = arr.copy()
-        else:
-            ser = pd.Series(arr, index=index, name=name)
+        ser = arr.copy() if isinstance(arr, pd.Series) else pd.Series(arr, index=index, name=name)
         if not ser.index.equals(index):
             raise ValueError(f"`{name}` index mismatch with `X`.")
         return ser.astype("category")
 
     @staticmethod
-    def _to_df(
-        arr: Optional[ArrayLike],
-        index: pd.Index,
-        name: str
-    ) -> Optional[pd.DataFrame]:
+    def _to_df(arr: ArrayLike | None, index: pd.Index, name: str) -> pd.DataFrame | None:
         """Convert array-like to DataFrame."""
         if arr is None:
             return None
@@ -655,11 +644,11 @@ class ComBatModel:
     def fit(
         self,
         X: ArrayLike,
-        y: Optional[ArrayLike] = None,
+        y: ArrayLike | None = None,
         *,
         batch: ArrayLike,
-        discrete_covariates: Optional[ArrayLike] = None,
-        continuous_covariates: Optional[ArrayLike] = None,
+        discrete_covariates: ArrayLike | None = None,
+        continuous_covariates: ArrayLike | None = None,
     ) -> ComBatModel:
         """Fit the ComBat model."""
         method = self.method.lower()
@@ -681,9 +670,7 @@ class ComBatModel:
 
         if method == "johnson":
             if disc is not None or cont is not None:
-                warnings.warn(
-                    "Covariates are ignored when using method='johnson'."
-                )
+                warnings.warn("Covariates are ignored when using method='johnson'.", stacklevel=2)
             self._fit_johnson(X, batch)
         elif method == "fortin":
             self._fit_fortin(X, batch, disc, cont)
@@ -691,11 +678,7 @@ class ComBatModel:
             self._fit_chen(X, batch, disc, cont)
         return self
 
-    def _fit_johnson(
-        self,
-        X: pd.DataFrame,
-        batch: pd.Series
-    ) -> None:
+    def _fit_johnson(self, X: pd.DataFrame, batch: pd.Series) -> None:
         """Johnson et al. (2007) ComBat."""
         self._batch_levels = batch.cat.categories
         pooled_var = X.var(axis=0, ddof=1) + self.eps
@@ -703,10 +686,10 @@ class ComBatModel:
 
         Xs = (X - grand_mean) / np.sqrt(pooled_var)
 
-        n_per_batch: Dict[str, int] = {}
+        n_per_batch: dict[str, int] = {}
         gamma_hat: list[npt.NDArray[np.float64]] = []
         delta_hat: list[npt.NDArray[np.float64]] = []
-        
+
         for lvl in self._batch_levels:
             idx = batch == lvl
             n_b = int(idx.sum())
@@ -751,8 +734,8 @@ class ComBatModel:
         self,
         X: pd.DataFrame,
         batch: pd.Series,
-        disc: Optional[pd.DataFrame],
-        cont: Optional[pd.DataFrame],
+        disc: pd.DataFrame | None,
+        cont: pd.DataFrame | None,
     ) -> None:
         """Fortin et al. (2018) neuroComBat."""
         self._batch_levels = batch.cat.categories
@@ -770,11 +753,7 @@ class ComBatModel:
 
         parts: list[pd.DataFrame] = [batch_dummies]
         if disc is not None:
-            parts.append(
-                pd.get_dummies(
-                    disc.astype("category"), drop_first=True
-                ).astype(float)
-            )
+            parts.append(pd.get_dummies(disc.astype("category"), drop_first=True).astype(float))
 
         if cont is not None:
             parts.append(cont.astype(float))
@@ -789,7 +768,7 @@ class ComBatModel:
         self._beta_hat_nonbatch = beta_hat[n_batch:]
 
         n_per_batch = batch.value_counts().sort_index().astype(int).values
-        self._n_per_batch = dict(zip(self._batch_levels, n_per_batch))
+        self._n_per_batch = dict(zip(self._batch_levels, n_per_batch, strict=True))
 
         if self.reference_batch is not None:
             ref_idx = list(self._batch_levels).index(self.reference_batch)
@@ -807,30 +786,25 @@ class ComBatModel:
         else:
             resid = X_np - design @ beta_hat
             denom = n_samples
-        var_pooled = (resid ** 2).sum(axis=0) / denom + self.eps
+        var_pooled = (resid**2).sum(axis=0) / denom + self.eps
         self._pooled_var = pd.Series(var_pooled, index=X.columns)
 
         stand_mean = grand_mean + design[:, n_batch:] @ self._beta_hat_nonbatch
         Xs = (X_np - stand_mean) / np.sqrt(var_pooled)
 
-        gamma_hat = np.vstack(
-            [Xs[batch == lvl].mean(axis=0) for lvl in self._batch_levels]
-        )
+        gamma_hat = np.vstack([Xs[batch == lvl].mean(axis=0) for lvl in self._batch_levels])
         delta_hat = np.vstack(
-            [Xs[batch == lvl].var(axis=0, ddof=1) + self.eps
-             for lvl in self._batch_levels]
+            [Xs[batch == lvl].var(axis=0, ddof=1) + self.eps for lvl in self._batch_levels]
         )
 
         if self.mean_only:
             gamma_star = self._shrink_gamma(
-                gamma_hat, delta_hat, n_per_batch,
-                parametric = self.parametric
+                gamma_hat, delta_hat, n_per_batch, parametric=self.parametric
             )
             delta_star = np.ones_like(delta_hat)
         else:
             gamma_star, delta_star = self._shrink_gamma_delta(
-                gamma_hat, delta_hat, n_per_batch,
-                parametric = self.parametric
+                gamma_hat, delta_hat, n_per_batch, parametric=self.parametric
             )
 
         if ref_idx is not None:
@@ -841,15 +815,15 @@ class ComBatModel:
 
         self._gamma_star = gamma_star
         self._delta_star = delta_star
-        self._n_batch  = n_batch
+        self._n_batch = n_batch
         self._p_design = p_design
-    
+
     def _fit_chen(
         self,
         X: pd.DataFrame,
         batch: pd.Series,
-        disc: Optional[pd.DataFrame],
-        cont: Optional[pd.DataFrame],
+        disc: pd.DataFrame | None,
+        cont: pd.DataFrame | None,
     ) -> None:
         """Chen et al. (2022) CovBat."""
         self._fit_fortin(X, batch, disc, cont)
@@ -868,7 +842,7 @@ class ComBatModel:
         self._covbat_n_pc = n_pc
 
         scores = pca.transform(X_centered)[:, :n_pc]
-        scores_df = pd.DataFrame(scores, index=X.index, columns=[f"PC{i+1}" for i in range(n_pc)])
+        scores_df = pd.DataFrame(scores, index=X.index, columns=[f"PC{i + 1}" for i in range(n_pc)])
         self._batch_levels_pc = self._batch_levels
         n_per_batch = self._n_per_batch
 
@@ -907,12 +881,12 @@ class ComBatModel:
         self,
         gamma_hat: FloatArray,
         delta_hat: FloatArray,
-        n_per_batch: Union[Dict[str, int], FloatArray],
+        n_per_batch: dict[str, int] | FloatArray,
         *,
         parametric: bool,
         max_iter: int = 100,
         tol: float = 1e-4,
-    ) -> Tuple[FloatArray, FloatArray]:
+    ) -> tuple[FloatArray, FloatArray]:
         """Empirical Bayes shrinkage estimation."""
         if parametric:
             gamma_bar = gamma_hat.mean(axis=0)
@@ -920,10 +894,14 @@ class ComBatModel:
             a_prior = (delta_hat.mean(axis=0) ** 2) / delta_hat.var(axis=0, ddof=1) + 2
             b_prior = delta_hat.mean(axis=0) * (a_prior - 1)
 
-            B, p = gamma_hat.shape
+            B, _p = gamma_hat.shape
             gamma_star = np.empty_like(gamma_hat)
             delta_star = np.empty_like(delta_hat)
-            n_vec = np.array(list(n_per_batch.values())) if isinstance(n_per_batch, dict) else n_per_batch
+            n_vec = (
+                np.array(list(n_per_batch.values()))
+                if isinstance(n_per_batch, dict)
+                else n_per_batch
+            )
 
             for i in range(B):
                 n_i = n_vec[i]
@@ -937,8 +915,12 @@ class ComBatModel:
             return gamma_star, delta_star
 
         else:
-            B, p = gamma_hat.shape
-            n_vec = np.array(list(n_per_batch.values())) if isinstance(n_per_batch, dict) else n_per_batch
+            B, _p = gamma_hat.shape
+            n_vec = (
+                np.array(list(n_per_batch.values()))
+                if isinstance(n_per_batch, dict)
+                else n_per_batch
+            )
             gamma_bar = gamma_hat.mean(axis=0)
             t2 = gamma_hat.var(axis=0, ddof=1)
 
@@ -947,27 +929,22 @@ class ComBatModel:
                 g_bar: FloatArray,
                 n: float,
                 d_star: FloatArray,
-                t2_: FloatArray
+                t2_: FloatArray,
             ) -> FloatArray:
                 return (t2_ * n * g_hat + d_star * g_bar) / (t2_ * n + d_star)
 
-            def postvar(
-                sum2: FloatArray,
-                n: float,
-                a: FloatArray,
-                b: FloatArray
-            ) -> FloatArray:
+            def postvar(sum2: FloatArray, n: float, a: FloatArray, b: FloatArray) -> FloatArray:
                 return (0.5 * sum2 + b) / (n / 2.0 + a - 1.0)
 
             def aprior(delta: FloatArray) -> FloatArray:
                 m, s2 = delta.mean(), delta.var()
                 s2 = max(s2, self.eps)
-                return (2 * s2 + m ** 2) / s2
+                return (2 * s2 + m**2) / s2
 
             def bprior(delta: FloatArray) -> FloatArray:
                 m, s2 = delta.mean(), delta.var()
                 s2 = max(s2, self.eps)
-                return (m * s2 + m ** 3) / s2
+                return (m * s2 + m**3) / s2
 
             gamma_star = np.empty_like(gamma_hat)
             delta_star = np.empty_like(delta_hat)
@@ -986,7 +963,8 @@ class ComBatModel:
                     sum2 = (n_i - 1) * d_hat_i + n_i * (g_hat_i - g_new) ** 2
                     d_new = postvar(sum2, n_i, a_i, b_i)
                     if np.max(np.abs(g_new - g_prev) / (np.abs(g_prev) + self.eps)) < tol and (
-                        self.mean_only or np.max(np.abs(d_new - d_prev) / (np.abs(d_prev) + self.eps)) < tol
+                        self.mean_only
+                        or np.max(np.abs(d_new - d_prev) / (np.abs(d_prev) + self.eps)) < tol
                     ):
                         break
                 gamma_star[i] = g_new
@@ -997,12 +975,14 @@ class ComBatModel:
         self,
         gamma_hat: FloatArray,
         delta_hat: FloatArray,
-        n_per_batch: Union[Dict[str, int], FloatArray],
+        n_per_batch: dict[str, int] | FloatArray,
         *,
         parametric: bool,
     ) -> FloatArray:
-        """Convenience wrapper that returns only γ⋆ (for *mean-only* mode)."""
-        gamma, _ = self._shrink_gamma_delta(gamma_hat, delta_hat, n_per_batch, parametric=parametric)
+        """Convenience wrapper that returns only gamma* (for *mean-only* mode)."""
+        gamma, _ = self._shrink_gamma_delta(
+            gamma_hat, delta_hat, n_per_batch, parametric=parametric
+        )
         return gamma
 
     def transform(
@@ -1010,12 +990,14 @@ class ComBatModel:
         X: ArrayLike,
         *,
         batch: ArrayLike,
-        discrete_covariates: Optional[ArrayLike] = None,
-        continuous_covariates: Optional[ArrayLike] = None,
+        discrete_covariates: ArrayLike | None = None,
+        continuous_covariates: ArrayLike | None = None,
     ) -> pd.DataFrame:
         """Transform the data using fitted ComBat parameters."""
         if not hasattr(self, "_gamma_star"):
-            raise ValueError("This ComBatModel instance is not fitted yet. Call 'fit' before 'transform'.")
+            raise ValueError(
+                "This ComBatModel instance is not fitted yet. Call 'fit' before 'transform'."
+            )
         if not isinstance(X, pd.DataFrame):
             X = pd.DataFrame(X)
         idx = X.index
@@ -1036,11 +1018,7 @@ class ComBatModel:
         else:
             raise ValueError(f"Unknown method: {method}.")
 
-    def _transform_johnson(
-        self,
-        X: pd.DataFrame,
-        batch: pd.Series
-    ) -> pd.DataFrame:
+    def _transform_johnson(self, X: pd.DataFrame, batch: pd.Series) -> pd.DataFrame:
         """Johnson transform implementation."""
         pooled = self._pooled_var
         grand = self._grand_mean
@@ -1058,10 +1036,7 @@ class ComBatModel:
 
             g = self._gamma_star[i]
             d = self._delta_star[i]
-            if self.mean_only:
-                Xb = Xs.loc[idx] - g
-            else:
-                Xb = (Xs.loc[idx] - g) / np.sqrt(d)
+            Xb = Xs.loc[idx] - g if self.mean_only else (Xs.loc[idx] - g) / np.sqrt(d)
             X_adj.loc[idx] = (Xb * np.sqrt(pooled) + grand).values
         return X_adj
 
@@ -1069,8 +1044,8 @@ class ComBatModel:
         self,
         X: pd.DataFrame,
         batch: pd.Series,
-        disc: Optional[pd.DataFrame],
-        cont: Optional[pd.DataFrame],
+        disc: pd.DataFrame | None,
+        cont: pd.DataFrame | None,
     ) -> pd.DataFrame:
         """Fortin transform implementation."""
         batch_dummies = pd.get_dummies(batch, drop_first=False).astype(float)[self._batch_levels]
@@ -1079,21 +1054,14 @@ class ComBatModel:
 
         parts = [batch_dummies]
         if disc is not None:
-            parts.append(
-                pd.get_dummies(
-                    disc.astype("category"), drop_first=True
-                ).astype(float)
-            )
+            parts.append(pd.get_dummies(disc.astype("category"), drop_first=True).astype(float))
         if cont is not None:
             parts.append(cont.astype(float))
 
         design = pd.concat(parts, axis=1).values
 
         X_np = X.values
-        stand_mu = (
-            self._grand_mean.values +
-            design[:, self._n_batch:] @ self._beta_hat_nonbatch
-        )
+        stand_mu = self._grand_mean.values + design[:, self._n_batch :] @ self._beta_hat_nonbatch
         Xs = (X_np - stand_mu) / np.sqrt(self._pooled_var.values)
 
         for i, lvl in enumerate(self._batch_levels):
@@ -1111,18 +1079,15 @@ class ComBatModel:
             else:
                 Xs[idx] = (Xs[idx] - g) / np.sqrt(d)
 
-        X_adj = (
-            Xs * np.sqrt(self._pooled_var.values) +
-            stand_mu
-        )
+        X_adj = Xs * np.sqrt(self._pooled_var.values) + stand_mu
         return pd.DataFrame(X_adj, index=X.index, columns=X.columns, dtype=float)
-    
+
     def _transform_chen(
         self,
         X: pd.DataFrame,
         batch: pd.Series,
-        disc: Optional[pd.DataFrame],
-        cont: Optional[pd.DataFrame],
+        disc: pd.DataFrame | None,
+        cont: pd.DataFrame | None,
     ) -> pd.DataFrame:
         """Chen transform implementation."""
         X_meanvar_adj = self._transform_fortin(X, batch, disc, cont)
@@ -1159,14 +1124,14 @@ class ComBat(BaseEstimator, TransformerMixin):
         self,
         batch: ArrayLike,
         *,
-        discrete_covariates: Optional[ArrayLike] = None,
-        continuous_covariates: Optional[ArrayLike] = None,
+        discrete_covariates: ArrayLike | None = None,
+        continuous_covariates: ArrayLike | None = None,
         method: str = "johnson",
         parametric: bool = True,
         mean_only: bool = False,
-        reference_batch: Optional[str] = None,
+        reference_batch: str | None = None,
         eps: float = 1e-8,
-        covbat_cov_thresh: Union[float, int] = 0.9,
+        covbat_cov_thresh: float | int = 0.9,
         compute_metrics: bool = False,
     ) -> None:
         self.batch = batch
@@ -1188,11 +1153,7 @@ class ComBat(BaseEstimator, TransformerMixin):
             covbat_cov_thresh=covbat_cov_thresh,
         )
 
-    def fit(
-        self,
-        X: ArrayLike,
-        y: Optional[ArrayLike] = None
-    ) -> "ComBat":
+    def fit(self, X: ArrayLike, y: ArrayLike | None = None) -> ComBat:
         """Fit the ComBat model."""
         idx = X.index if isinstance(X, pd.DataFrame) else pd.RangeIndex(len(X))
         batch_vec = self._subset(self.batch, idx)
@@ -1221,10 +1182,7 @@ class ComBat(BaseEstimator, TransformerMixin):
         )
 
     @staticmethod
-    def _subset(
-        obj: Optional[ArrayLike],
-        idx: pd.Index
-    ) -> Optional[Union[pd.DataFrame, pd.Series]]:
+    def _subset(obj: ArrayLike | None, idx: pd.Index) -> pd.DataFrame | pd.Series | None:
         """Subset array-like object by index."""
         if obj is None:
             return None
@@ -1237,7 +1195,7 @@ class ComBat(BaseEstimator, TransformerMixin):
                 return pd.DataFrame(obj, index=idx)
 
     @property
-    def metrics_(self) -> Optional[Dict[str, Any]]:
+    def metrics_(self) -> dict[str, Any] | None:
         """Return cached metrics from last fit_transform with compute_metrics=True.
 
         Returns
@@ -1245,19 +1203,19 @@ class ComBat(BaseEstimator, TransformerMixin):
         dict or None
             Cached metrics dictionary, or None if no metrics have been computed.
         """
-        return getattr(self, '_metrics_cache', None)
+        return getattr(self, "_metrics_cache", None)
 
     def compute_batch_metrics(
         self,
         X: ArrayLike,
-        batch: Optional[ArrayLike] = None,
+        batch: ArrayLike | None = None,
         *,
-        pca_components: Optional[int] = None,
-        k_neighbors: List[int] = [5, 10, 50],
-        kbet_k0: Optional[int] = None,
+        pca_components: int | None = None,
+        k_neighbors: list[int] | None = None,
+        kbet_k0: int | None = None,
         lisi_perplexity: int = 30,
         n_jobs: int = 1,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Compute batch effect metrics before and after ComBat correction.
 
@@ -1282,25 +1240,14 @@ class ComBat(BaseEstimator, TransformerMixin):
 
         Returns
         -------
-        metrics : dict
-            Dictionary with structure:
-            {
-                'batch_effect': {
-                    'silhouette': {'before': float, 'after': float},
-                    'davies_bouldin': {...},
-                    'kbet': {...},
-                    'lisi': {..., 'max_value': n_batches},
-                    'variance_ratio': {...},
-                },
-                'preservation': {
-                    'knn': {k: fraction for k in k_neighbors},
-                    'distance_correlation': float,
-                },
-                'alignment': {
-                    'centroid_distance': {...},
-                    'levene_statistic': {...},
-                },
-            }
+        dict
+            Dictionary with three main keys:
+
+            - ``batch_effect``: Silhouette, Davies-Bouldin, kBET, LISI, variance ratio
+              (each with 'before' and 'after' values)
+            - ``preservation``: k-NN preservation fractions, distance correlation
+            - ``alignment``: Centroid distance, Levene statistic (each with
+              'before' and 'after' values)
 
         Raises
         ------
@@ -1309,8 +1256,7 @@ class ComBat(BaseEstimator, TransformerMixin):
         """
         if not hasattr(self._model, "_gamma_star"):
             raise ValueError(
-                "This ComBat instance is not fitted yet. "
-                "Call 'fit' before 'compute_batch_metrics'."
+                "This ComBat instance is not fitted yet. Call 'fit' before 'compute_batch_metrics'."
             )
 
         if not isinstance(X, pd.DataFrame):
@@ -1322,7 +1268,7 @@ class ComBat(BaseEstimator, TransformerMixin):
             batch_vec = self._subset(self.batch, idx)
         else:
             if isinstance(batch, (pd.Series, pd.DataFrame)):
-                batch_vec = batch.loc[idx] if hasattr(batch, 'loc') else batch
+                batch_vec = batch.loc[idx] if hasattr(batch, "loc") else batch
             elif isinstance(batch, np.ndarray):
                 batch_vec = pd.Series(batch, index=idx)
             else:
@@ -1336,6 +1282,8 @@ class ComBat(BaseEstimator, TransformerMixin):
         n_samples, n_features = X_before.shape
         if kbet_k0 is None:
             kbet_k0 = max(10, int(0.10 * n_samples))
+        if k_neighbors is None:
+            k_neighbors = [5, 10, 50]
 
         # Validate and apply PCA if requested
         if pca_components is not None:
@@ -1345,9 +1293,7 @@ class ComBat(BaseEstimator, TransformerMixin):
                     f"pca_components={pca_components} must be less than "
                     f"min(n_samples, n_features)={max_components}."
                 )
-            X_before_pca, X_after_pca, _ = _compute_pca_embedding(
-                X_before, X_after, pca_components
-            )
+            X_before_pca, X_after_pca, _ = _compute_pca_embedding(X_before, X_after, pca_components)
         else:
             X_before_pca = X_before
             X_after_pca = X_after
@@ -1379,57 +1325,53 @@ class ComBat(BaseEstimator, TransformerMixin):
         n_batches = len(np.unique(batch_labels))
 
         metrics = {
-            'batch_effect': {
-                'silhouette': {
-                    'before': silhouette_before,
-                    'after': silhouette_after,
+            "batch_effect": {
+                "silhouette": {
+                    "before": silhouette_before,
+                    "after": silhouette_after,
                 },
-                'davies_bouldin': {
-                    'before': db_before,
-                    'after': db_after,
+                "davies_bouldin": {
+                    "before": db_before,
+                    "after": db_after,
                 },
-                'kbet': {
-                    'before': kbet_before,
-                    'after': kbet_after,
+                "kbet": {
+                    "before": kbet_before,
+                    "after": kbet_after,
                 },
-                'lisi': {
-                    'before': lisi_before,
-                    'after': lisi_after,
-                    'max_value': n_batches,
+                "lisi": {
+                    "before": lisi_before,
+                    "after": lisi_after,
+                    "max_value": n_batches,
                 },
-                'variance_ratio': {
-                    'before': var_ratio_before,
-                    'after': var_ratio_after,
+                "variance_ratio": {
+                    "before": var_ratio_before,
+                    "after": var_ratio_after,
                 },
             },
-            'preservation': {
-                'knn': knn_results,
-                'distance_correlation': dist_corr,
+            "preservation": {
+                "knn": knn_results,
+                "distance_correlation": dist_corr,
             },
-            'alignment': {
-                'centroid_distance': {
-                    'before': centroid_before,
-                    'after': centroid_after,
+            "alignment": {
+                "centroid_distance": {
+                    "before": centroid_before,
+                    "after": centroid_after,
                 },
-                'levene_statistic': {
-                    'before': levene_before,
-                    'after': levene_after,
+                "levene_statistic": {
+                    "before": levene_before,
+                    "after": levene_after,
                 },
             },
         }
 
         return metrics
 
-    def fit_transform(
-        self,
-        X: ArrayLike,
-        y: Optional[ArrayLike] = None
-    ) -> pd.DataFrame:
+    def fit_transform(self, X: ArrayLike, y: ArrayLike | None = None) -> pd.DataFrame:
         """
         Fit and transform the data, optionally computing metrics.
 
-        If compute_metrics=True was set at construction, batch effect
-        metrics are computed and cached in metrics_ property.
+        If ``compute_metrics=True`` was set at construction, batch effect
+        metrics are computed and cached in the ``metrics_`` property.
 
         Parameters
         ----------
@@ -1452,19 +1394,21 @@ class ComBat(BaseEstimator, TransformerMixin):
         return X_transformed
 
     def plot_transformation(
-            self,
-            X: ArrayLike, *, 
-            reduction_method: Literal['pca', 'tsne', 'umap'] = 'pca', 
-            n_components: Literal[2, 3] = 2,
-            plot_type: Literal['static', 'interactive'] = 'static',
-            figsize: Tuple[int, int] = (12, 5),
-            alpha: float = 0.7,
-            point_size: int = 50,
-            cmap: str = 'Set1',
-            title: Optional[str] = None,
-            show_legend: bool = True,
-            return_embeddings: bool = False,
-            **reduction_kwargs) -> Union[Any, Tuple[Any, Dict[str, FloatArray]]]:
+        self,
+        X: ArrayLike,
+        *,
+        reduction_method: Literal["pca", "tsne", "umap"] = "pca",
+        n_components: Literal[2, 3] = 2,
+        plot_type: Literal["static", "interactive"] = "static",
+        figsize: tuple[int, int] = (12, 5),
+        alpha: float = 0.7,
+        point_size: int = 50,
+        cmap: str = "Set1",
+        title: str | None = None,
+        show_legend: bool = True,
+        return_embeddings: bool = False,
+        **reduction_kwargs,
+    ) -> Any | tuple[Any, dict[str, FloatArray]]:
         """
         Visualize the ComBat transformation effect using dimensionality reduction.
 
@@ -1489,28 +1433,32 @@ class ComBat(BaseEstimator, TransformerMixin):
 
         return_embeddings : bool, default=False
             If `True`, return embeddings along with the plot.
-            
+
         **reduction_kwargs : dict
             Additional parameters for reduction methods.
-            
+
         Returns
         -------
         fig : matplotlib.figure.Figure or plotly.graph_objects.Figure
             The figure object containing the plots.
-            
+
         embeddings : dict, optional
             If `return_embeddings=True`, dictionary with:
             - `'original'`: embedding of original data
             - `'transformed'`: embedding of ComBat-transformed data
         """
         if not hasattr(self._model, "_gamma_star"):
-            raise ValueError("This ComBat instance is not fitted yet. Call 'fit' before 'plot_transformation'.")
+            raise ValueError(
+                "This ComBat instance is not fitted yet. Call 'fit' before 'plot_transformation'."
+            )
 
         if n_components not in [2, 3]:
             raise ValueError(f"n_components must be 2 or 3, got {n_components}")
-        if reduction_method not in ['pca', 'tsne', 'umap']:
-            raise ValueError(f"reduction_method must be 'pca', 'tsne', or 'umap', got '{reduction_method}'")
-        if plot_type not in ['static', 'interactive']:
+        if reduction_method not in ["pca", "tsne", "umap"]:
+            raise ValueError(
+                f"reduction_method must be 'pca', 'tsne', or 'umap', got '{reduction_method}'"
+            )
+        if plot_type not in ["static", "interactive"]:
             raise ValueError(f"plot_type must be 'static' or 'interactive', got '{plot_type}'")
 
         if not isinstance(X, pd.DataFrame):
@@ -1526,16 +1474,16 @@ class ComBat(BaseEstimator, TransformerMixin):
         X_np = X.values
         X_trans_np = X_transformed.values
 
-        if reduction_method == 'pca':
+        if reduction_method == "pca":
             reducer_orig = PCA(n_components=n_components, **reduction_kwargs)
             reducer_trans = PCA(n_components=n_components, **reduction_kwargs)
-        elif reduction_method == 'tsne':
-            tsne_params = {'perplexity': 30, 'max_iter': 1000, 'random_state': 42}
+        elif reduction_method == "tsne":
+            tsne_params = {"perplexity": 30, "max_iter": 1000, "random_state": 42}
             tsne_params.update(reduction_kwargs)
             reducer_orig = TSNE(n_components=n_components, **tsne_params)
             reducer_trans = TSNE(n_components=n_components, **tsne_params)
         else:
-            umap_params = {'random_state': 42}
+            umap_params = {"random_state": 42}
             umap_params.update(reduction_kwargs)
             reducer_orig = umap.UMAP(n_components=n_components, **umap_params)
             reducer_trans = umap.UMAP(n_components=n_components, **umap_params)
@@ -1543,40 +1491,52 @@ class ComBat(BaseEstimator, TransformerMixin):
         X_embedded_orig = reducer_orig.fit_transform(X_np)
         X_embedded_trans = reducer_trans.fit_transform(X_trans_np)
 
-        if plot_type == 'static':
+        if plot_type == "static":
             fig = self._create_static_plot(
-                X_embedded_orig, X_embedded_trans, batch_vec, 
-                reduction_method, n_components, figsize, alpha, 
-                point_size, cmap, title, show_legend
+                X_embedded_orig,
+                X_embedded_trans,
+                batch_vec,
+                reduction_method,
+                n_components,
+                figsize,
+                alpha,
+                point_size,
+                cmap,
+                title,
+                show_legend,
             )
         else:
             fig = self._create_interactive_plot(
-                X_embedded_orig, X_embedded_trans, batch_vec,
-                reduction_method, n_components, cmap, title, show_legend
+                X_embedded_orig,
+                X_embedded_trans,
+                batch_vec,
+                reduction_method,
+                n_components,
+                cmap,
+                title,
+                show_legend,
             )
 
         if return_embeddings:
-            embeddings = {
-                'original': X_embedded_orig,
-                'transformed': X_embedded_trans
-            }
+            embeddings = {"original": X_embedded_orig, "transformed": X_embedded_trans}
             return fig, embeddings
         else:
             return fig
 
     def _create_static_plot(
-            self,
-            X_orig: FloatArray,
-            X_trans: FloatArray, 
-            batch_labels: pd.Series,
-            method: str,
-            n_components: int,
-            figsize: Tuple[int, int],
-            alpha: float,
-            point_size: int, 
-            cmap: str,
-            title: Optional[str],
-            show_legend: bool) -> Any:
+        self,
+        X_orig: FloatArray,
+        X_trans: FloatArray,
+        batch_labels: pd.Series,
+        method: str,
+        n_components: int,
+        figsize: tuple[int, int],
+        alpha: float,
+        point_size: int,
+        cmap: str,
+        title: str | None,
+        show_legend: bool,
+    ) -> Any:
         """Create static plots using matplotlib."""
 
         fig = plt.figure(figsize=figsize)
@@ -1587,119 +1547,130 @@ class ComBat(BaseEstimator, TransformerMixin):
         if n_batches <= 10:
             colors = matplotlib.colormaps.get_cmap(cmap)(np.linspace(0, 1, n_batches))
         else:
-            colors = matplotlib.colormaps.get_cmap('tab20')(np.linspace(0, 1, n_batches))
+            colors = matplotlib.colormaps.get_cmap("tab20")(np.linspace(0, 1, n_batches))
 
         if n_components == 2:
             ax1 = plt.subplot(1, 2, 1)
             ax2 = plt.subplot(1, 2, 2)
         else:
-            ax1 = fig.add_subplot(121, projection='3d')
-            ax2 = fig.add_subplot(122, projection='3d')
+            ax1 = fig.add_subplot(121, projection="3d")
+            ax2 = fig.add_subplot(122, projection="3d")
 
         for i, batch in enumerate(unique_batches):
             mask = batch_labels == batch
             if n_components == 2:
                 ax1.scatter(
-                    X_orig[mask, 0], X_orig[mask, 1], 
+                    X_orig[mask, 0],
+                    X_orig[mask, 1],
                     c=[colors[i]],
                     s=point_size,
-                    alpha=alpha, 
-                    label=f'Batch {batch}',
-                    edgecolors='black',
-                    linewidth=0.5
+                    alpha=alpha,
+                    label=f"Batch {batch}",
+                    edgecolors="black",
+                    linewidth=0.5,
                 )
             else:
                 ax1.scatter(
-                    X_orig[mask, 0], X_orig[mask, 1], X_orig[mask, 2],
+                    X_orig[mask, 0],
+                    X_orig[mask, 1],
+                    X_orig[mask, 2],
                     c=[colors[i]],
                     s=point_size,
-                    alpha=alpha, 
-                    label=f'Batch {batch}',
-                    edgecolors='black',
-                    linewidth=0.5
+                    alpha=alpha,
+                    label=f"Batch {batch}",
+                    edgecolors="black",
+                    linewidth=0.5,
                 )
 
-        ax1.set_title(f'Before ComBat correction\n({method.upper()})')
-        ax1.set_xlabel(f'{method.upper()}1')
-        ax1.set_ylabel(f'{method.upper()}2')
+        ax1.set_title(f"Before ComBat correction\n({method.upper()})")
+        ax1.set_xlabel(f"{method.upper()}1")
+        ax1.set_ylabel(f"{method.upper()}2")
         if n_components == 3:
-            ax1.set_zlabel(f'{method.upper()}3')
+            ax1.set_zlabel(f"{method.upper()}3")
 
         for i, batch in enumerate(unique_batches):
             mask = batch_labels == batch
             if n_components == 2:
                 ax2.scatter(
-                    X_trans[mask, 0], X_trans[mask, 1], 
+                    X_trans[mask, 0],
+                    X_trans[mask, 1],
                     c=[colors[i]],
                     s=point_size,
-                    alpha=alpha, 
-                    label=f'Batch {batch}',
-                    edgecolors='black',
-                    linewidth=0.5
+                    alpha=alpha,
+                    label=f"Batch {batch}",
+                    edgecolors="black",
+                    linewidth=0.5,
                 )
             else:
                 ax2.scatter(
-                    X_trans[mask, 0], X_trans[mask, 1], X_trans[mask, 2],
+                    X_trans[mask, 0],
+                    X_trans[mask, 1],
+                    X_trans[mask, 2],
                     c=[colors[i]],
                     s=point_size,
-                    alpha=alpha, 
-                    label=f'Batch {batch}',
-                    edgecolors='black',
-                    linewidth=0.5
+                    alpha=alpha,
+                    label=f"Batch {batch}",
+                    edgecolors="black",
+                    linewidth=0.5,
                 )
 
-        ax2.set_title(f'After ComBat correction\n({method.upper()})')
-        ax2.set_xlabel(f'{method.upper()}1')
-        ax2.set_ylabel(f'{method.upper()}2')
+        ax2.set_title(f"After ComBat correction\n({method.upper()})")
+        ax2.set_xlabel(f"{method.upper()}1")
+        ax2.set_ylabel(f"{method.upper()}2")
         if n_components == 3:
-            ax2.set_zlabel(f'{method.upper()}3')
+            ax2.set_zlabel(f"{method.upper()}3")
 
         if show_legend and n_batches <= 20:
-            ax2.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+            ax2.legend(bbox_to_anchor=(1.05, 1), loc="upper left")
 
         if title is None:
-            title = f'ComBat correction effect visualized with {method.upper()}'
-        fig.suptitle(title, fontsize=14, fontweight='bold')
+            title = f"ComBat correction effect visualized with {method.upper()}"
+        fig.suptitle(title, fontsize=14, fontweight="bold")
 
         plt.tight_layout()
         return fig
 
     def _create_interactive_plot(
-            self,
-            X_orig: FloatArray,
-            X_trans: FloatArray,
-            batch_labels: pd.Series,
-            method: str,
-            n_components: int,
-            cmap: str,
-            title: Optional[str],
-            show_legend: bool) -> Any:
+        self,
+        X_orig: FloatArray,
+        X_trans: FloatArray,
+        batch_labels: pd.Series,
+        method: str,
+        n_components: int,
+        cmap: str,
+        title: str | None,
+        show_legend: bool,
+    ) -> Any:
         """Create interactive plots using plotly."""
         if n_components == 2:
             fig = make_subplots(
-                rows=1, cols=2,
+                rows=1,
+                cols=2,
                 subplot_titles=(
-                    f'Before ComBat correction ({method.upper()})',
-                    f'After ComBat correction ({method.upper()})'
-                )
+                    f"Before ComBat correction ({method.upper()})",
+                    f"After ComBat correction ({method.upper()})",
+                ),
             )
         else:
             fig = make_subplots(
-                rows=1, cols=2,
-                specs=[[{'type': 'scatter3d'}, {'type': 'scatter3d'}]],
+                rows=1,
+                cols=2,
+                specs=[[{"type": "scatter3d"}, {"type": "scatter3d"}]],
                 subplot_titles=(
-                    f'Before ComBat correction ({method.upper()})',
-                    f'After ComBat correction ({method.upper()})'
-                )
+                    f"Before ComBat correction ({method.upper()})",
+                    f"After ComBat correction ({method.upper()})",
+                ),
             )
 
         unique_batches = batch_labels.drop_duplicates()
 
         n_batches = len(unique_batches)
         cmap_func = matplotlib.colormaps.get_cmap(cmap)
-        color_list = [mcolors.to_hex(cmap_func(i / max(n_batches - 1, 1))) for i in range(n_batches)]
+        color_list = [
+            mcolors.to_hex(cmap_func(i / max(n_batches - 1, 1))) for i in range(n_batches)
+        ]
 
-        batch_to_color = dict(zip(unique_batches, color_list))
+        batch_to_color = dict(zip(unique_batches, color_list, strict=True))
 
         for batch in unique_batches:
             mask = batch_labels == batch
@@ -1707,72 +1678,86 @@ class ComBat(BaseEstimator, TransformerMixin):
             if n_components == 2:
                 fig.add_trace(
                     go.Scatter(
-                        x=X_orig[mask, 0], y=X_orig[mask, 1],
-                        mode='markers',
-                        name=f'Batch {batch}',
-                        marker=dict(
-                            size=8,
-                            color=batch_to_color[batch],
-                            line=dict(width=1, color='black')
-                        ),
-                        showlegend=False),
-                    row=1, col=1
+                        x=X_orig[mask, 0],
+                        y=X_orig[mask, 1],
+                        mode="markers",
+                        name=f"Batch {batch}",
+                        marker={
+                            "size": 8,
+                            "color": batch_to_color[batch],
+                            "line": {"width": 1, "color": "black"},
+                        },
+                        showlegend=False,
+                    ),
+                    row=1,
+                    col=1,
                 )
 
                 fig.add_trace(
                     go.Scatter(
-                        x=X_trans[mask, 0], y=X_trans[mask, 1],
-                        mode='markers',
-                        name=f'Batch {batch}',
-                        marker=dict(
-                            size=8,
-                            color=batch_to_color[batch],
-                            line=dict(width=1, color='black')
-                        ),
-                        showlegend=show_legend),
-                    row=1, col=2
+                        x=X_trans[mask, 0],
+                        y=X_trans[mask, 1],
+                        mode="markers",
+                        name=f"Batch {batch}",
+                        marker={
+                            "size": 8,
+                            "color": batch_to_color[batch],
+                            "line": {"width": 1, "color": "black"},
+                        },
+                        showlegend=show_legend,
+                    ),
+                    row=1,
+                    col=2,
                 )
             else:
                 fig.add_trace(
                     go.Scatter3d(
-                        x=X_orig[mask, 0], y=X_orig[mask, 1], z=X_orig[mask, 2],
-                        mode='markers',
-                        name=f'Batch {batch}',
-                        marker=dict(
-                            size=5,
-                            color=batch_to_color[batch],
-                            line=dict(width=0.5, color='black')
-                        ),
-                        showlegend=False),
-                    row=1, col=1
+                        x=X_orig[mask, 0],
+                        y=X_orig[mask, 1],
+                        z=X_orig[mask, 2],
+                        mode="markers",
+                        name=f"Batch {batch}",
+                        marker={
+                            "size": 5,
+                            "color": batch_to_color[batch],
+                            "line": {"width": 0.5, "color": "black"},
+                        },
+                        showlegend=False,
+                    ),
+                    row=1,
+                    col=1,
                 )
 
                 fig.add_trace(
                     go.Scatter3d(
-                        x=X_trans[mask, 0], y=X_trans[mask, 1], z=X_trans[mask, 2],
-                        mode='markers',
-                        name=f'Batch {batch}',
-                        marker=dict(
-                            size=5,
-                            color=batch_to_color[batch],
-                            line=dict(width=0.5, color='black')
-                        ),
-                        showlegend=show_legend),
-                    row=1, col=2
+                        x=X_trans[mask, 0],
+                        y=X_trans[mask, 1],
+                        z=X_trans[mask, 2],
+                        mode="markers",
+                        name=f"Batch {batch}",
+                        marker={
+                            "size": 5,
+                            "color": batch_to_color[batch],
+                            "line": {"width": 0.5, "color": "black"},
+                        },
+                        showlegend=show_legend,
+                    ),
+                    row=1,
+                    col=2,
                 )
 
         if title is None:
-            title = f'ComBat correction effect visualized with {method.upper()}'
+            title = f"ComBat correction effect visualized with {method.upper()}"
 
         fig.update_layout(
             title=title,
             title_font_size=16,
             height=600,
             showlegend=show_legend,
-            hovermode='closest'
+            hovermode="closest",
         )
 
-        axis_labels = [f'{method.upper()}{i+1}' for i in range(n_components)]
+        axis_labels = [f"{method.upper()}{i + 1}" for i in range(n_components)]
 
         if n_components == 2:
             fig.update_xaxes(title_text=axis_labels[0])
@@ -1781,7 +1766,7 @@ class ComBat(BaseEstimator, TransformerMixin):
             fig.update_scenes(
                 xaxis_title=axis_labels[0],
                 yaxis_title=axis_labels[1],
-                zaxis_title=axis_labels[2]
+                zaxis_title=axis_labels[2],
             )
 
         return fig
