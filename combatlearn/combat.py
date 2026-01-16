@@ -828,8 +828,7 @@ class ComBatModel:
         """Chen et al. (2022) CovBat."""
         self._fit_fortin(X, batch, disc, cont)
         X_meanvar_adj = self._transform_fortin(X, batch, disc, cont)
-        X_centered = X_meanvar_adj - X_meanvar_adj.mean(axis=0)
-        pca = PCA(svd_solver="full", whiten=False).fit(X_centered)
+        pca = PCA(svd_solver="full", whiten=False).fit(X_meanvar_adj)
 
         # Determine number of components based on threshold type
         if isinstance(self.covbat_cov_thresh, int):
@@ -841,7 +840,7 @@ class ComBatModel:
         self._covbat_pca = pca
         self._covbat_n_pc = n_pc
 
-        scores = pca.transform(X_centered)[:, :n_pc]
+        scores = pca.transform(X_meanvar_adj)[:, :n_pc]
         scores_df = pd.DataFrame(scores, index=X.index, columns=[f"PC{i + 1}" for i in range(n_pc)])
         self._batch_levels_pc = self._batch_levels
         n_per_batch = self._n_per_batch
@@ -1091,8 +1090,7 @@ class ComBatModel:
     ) -> pd.DataFrame:
         """Chen transform implementation."""
         X_meanvar_adj = self._transform_fortin(X, batch, disc, cont)
-        X_centered = X_meanvar_adj - self._covbat_pca.mean_
-        scores = self._covbat_pca.transform(X_centered)
+        scores = self._covbat_pca.transform(X_meanvar_adj)
         n_pc = self._covbat_n_pc
         scores_adj = scores.copy()
 
@@ -1109,7 +1107,7 @@ class ComBatModel:
             else:
                 scores_adj[idx, :n_pc] = (scores_adj[idx, :n_pc] - g) / np.sqrt(d)
 
-        X_recon = self._covbat_pca.inverse_transform(scores_adj) + self._covbat_pca.mean_
+        X_recon = self._covbat_pca.inverse_transform(scores_adj)
         return pd.DataFrame(X_recon, index=X.index, columns=X.columns)
 
 
