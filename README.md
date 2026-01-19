@@ -28,8 +28,8 @@ pip install combatlearn
 **Full documentation is available at [combatlearn.readthedocs.io](https://combatlearn.readthedocs.io)**
 
 The documentation includes:
-- [Methods Guide](https://combatlearn.readthedocs.io/en/latest/methods/)
-- [API Reference](https://combatlearn.readthedocs.io/en/latest/api/)
+- [Methods Guide](https://combatlearn.readthedocs.io/en/latest/methods.html)
+- [API Reference](https://combatlearn.readthedocs.io/en/latest/api.html)
 
 ## Quick start
 
