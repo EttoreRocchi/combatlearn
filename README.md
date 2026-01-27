@@ -125,21 +125,31 @@ Pull requests, bug reports, and feature ideas are welcome: feel free to open a P
 
 [Google Scholar](https://scholar.google.com/citations?user=MKHoGnQAAAAJ) | [Scopus](https://www.scopus.com/authid/detail.uri?authorId=57220152522)
 
-## Acknowledgements
-
-This project builds on the excellent work of the ComBat family of harmonisation methods.
-We gratefully acknowledge:
-
-- [**ComBat**](https://rdrr.io/bioc/sva/man/ComBat.html)
-- [**neuroCombat**](https://github.com/Jfortin1/neuroCombat)
-- [**CovBat**](https://github.com/andy1764/CovBat_Harmonization)
 
 ## Citation
 
-If **combatlearn** is useful in your research, please cite the original papers:
+If **combatlearn** is useful in your research, please cite the paper introducing this Python package:
 
-- Johnson WE, Li C, Rabinovic A. Adjusting batch effects in microarray expression data using empirical Bayes methods. _Biostatistics_. 2007 Jan;8(1):118-27. doi: [10.1093/biostatistics/kxj037](https://doi.org/10.1093/biostatistics/kxj037)
+> Rocchi, E., Nicitra, E., Calvo, M. et al. Combining mass spectrometry and machine learning models for predicting Klebsiella pneumoniae antimicrobial resistance: a multicenter experience from clinical isolates in Italy. BMC Microbiol (2026). https://doi.org/10.1186/s12866-025-04657-2
 
-- Fortin JP, Cullen N, Sheline YI, Taylor WD, Aselcioglu I, Cook PA, Adams P, Cooper C, Fava M, McGrath PJ, McInnis M, Phillips ML, Trivedi MH, Weissman MM, Shinohara RT. Harmonization of cortical thickness measurements across scanners and sites. _Neuroimage_. 2018 Feb 15;167:104-120. doi: [10.1016/j.neuroimage.2017.11.024](https://doi.org/10.1016/j.neuroimage.2017.11.024)
+```bibtex
+@article{Rocchi2026,
+  author    = {Rocchi, Ettore and Nicitra, Emanuele and Calvo, Maddalena and Cento, Valeria and Peiretti, Laura and Asif, Zian and Menchinelli, Giulia and Posteraro, Brunella and Sala, Claudia and Colosimo, Claudia and Cricca, Monica and Sambri, Vittorio and Sanguinetti, Maurizio and Castellani, Gastone and Stefani, Stefania},
+  title     = {Combining mass spectrometry and machine learning models for predicting Klebsiella pneumoniae antimicrobial resistance: a multicenter experience from clinical isolates in Italy},
+  journal   = {BMC Microbiology},
+  year      = {2026},
+  doi       = {10.1186/s12866-025-04657-2},
+  url       = {https://doi.org/10.1186/s12866-025-04657-2}
+}
+```
 
-- Chen AA, Beer JC, Tustison NJ, Cook PA, Shinohara RT, Shou H; Alzheimer's Disease Neuroimaging Initiative. Mitigating site effects in covariance for machine learning in neuroimaging data. _Hum Brain Mapp_. 2022 Mar;43(4):1179-1195. doi: [10.1002/hbm.25688](https://doi.org/10.1002/hbm.25688)
+## Acknowledgements
+
+This project builds on the excellent work of the ComBat family of harmonisation methods.
+Please consider citing the original papers:
+
+- [**ComBat**](https://rdrr.io/bioc/sva/man/ComBat.html) - Johnson WE, Li C, Rabinovic A. _Biostatistics_. 2007. doi: [10.1093/biostatistics/kxj037](https://doi.org/10.1093/biostatistics/kxj037)
+
+- [**neuroCombat**](https://github.com/Jfortin1/neuroCombat) - Fortin JP et al. _Neuroimage_. 2018. doi: [10.1016/j.neuroimage.2017.11.024](https://doi.org/10.1016/j.neuroimage.2017.11.024)
+
+- [**CovBat**](https://github.com/andy1764/CovBat_Harmonization) - Chen AA et al. _Hum Brain Mapp_. 2022. doi: [10.1002/hbm.25688](https://doi.org/10.1002/hbm.25688)
