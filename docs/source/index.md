@@ -30,6 +30,11 @@
   - Static (matplotlib) and interactive (plotly) visualizations
   - Before/after batch effect comparison
 
+- **Feature Importance Analysis** *(New in v1.2.0)*:
+  - Identify which features have strongest batch effects
+  - Location (mean shift) and scale (variance) decomposition
+  - Magnitude and distribution modes for different use cases
+
 ## Quick Example
 
 ```python
