@@ -52,7 +52,7 @@ napoleon_google_docstring = False
 napoleon_numpy_docstring = True
 napoleon_include_init_with_doc = True
 napoleon_include_private_with_doc = False
-napoleon_include_special_with_doc = True
+napoleon_include_special_with_doc = False
 napoleon_use_admonition_for_examples = True
 napoleon_use_admonition_for_notes = True
 napoleon_use_admonition_for_references = True
@@ -65,7 +65,6 @@ napoleon_type_aliases = None
 autodoc_default_options = {
     "members": True,
     "member-order": "bysource",
-    "special-members": "__init__",
     "undoc-members": True,
     "exclude-members": "__weakref__",
     "show-inheritance": True,
@@ -111,6 +110,7 @@ html_favicon = "_static/logo.png"
 
 # -- Options for autodoc -----------------------------------------------------
 add_module_names = False
+
 
 # -- Copy button configuration -----------------------------------------------
 copybutton_prompt_text = r">>> |\.\.\. |\$ |In \[\d*\]: | {2,5}\.\.\.: | {5,8}: "

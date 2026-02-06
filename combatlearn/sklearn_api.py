@@ -16,6 +16,29 @@ class ComBat(ComBatMetricsMixin, ComBatVisualizationMixin, BaseEstimator, Transf
 
     Stores batch (and optional covariates) passed at construction and
     appropriately uses them for separate `fit` and `transform`.
+
+    Parameters
+    ----------
+    batch : array-like of shape (n_samples,)
+        Batch labels for each sample.
+    discrete_covariates : array-like, optional
+        Categorical covariates to protect (Fortin/Chen only).
+    continuous_covariates : array-like, optional
+        Continuous covariates to protect (Fortin/Chen only).
+    method : {'johnson', 'fortin', 'chen'}, default='johnson'
+        ComBat variant to use.
+    parametric : bool, default=True
+        Use parametric empirical Bayes.
+    mean_only : bool, default=False
+        Adjust only the mean (ignore variance).
+    reference_batch : str, optional
+        Batch level to leave unchanged.
+    eps : float, default=1e-8
+        Numerical jitter for stability.
+    covbat_cov_thresh : float or int, default=0.9
+        CovBat variance threshold for PCs.
+    compute_metrics : bool, default=False
+        If True, ``fit_transform`` caches batch metrics in ``metrics_``.
     """
 
     def __init__(

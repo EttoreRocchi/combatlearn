@@ -714,15 +714,12 @@ class ComBatMetricsMixin:
     ) -> pd.DataFrame:
         """Compute per-feature batch effect magnitude.
 
-        Returns DataFrame with columns: 'location', 'scale', 'combined'
-        - location: RMS of gamma across batches (standardized mean shifts)
-        - scale: RMS of log(delta) across batches (log-fold variance change)
-        - combined: sqrt(location**2 + scale**2) - Euclidean norm treating
-          location and scale as orthogonal dimensions
-
-        Using RMS (root mean square) provides L2-consistent aggregation.
-        Using log(delta) ensures symmetry: delta=2 and delta=0.5
-        represent equally strong effects in opposite directions.
+        Returns a DataFrame with columns ``location``, ``scale``, and
+        ``combined``. Location is the RMS of gamma across batches
+        (standardized mean shifts). Scale is the RMS of log-delta across
+        batches (log-fold variance change). Combined is the Euclidean norm
+        sqrt(location**2 + scale**2). Using RMS provides L2-consistent
+        aggregation; using log(delta) ensures symmetry.
 
         Parameters
         ----------

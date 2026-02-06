@@ -10,6 +10,7 @@ The main scikit-learn compatible transformer for batch effect correction.
 
 .. autoclass:: combatlearn.ComBat
    :members:
-   :undoc-members:
+   :inherited-members: BaseEstimator, TransformerMixin, ReprHTMLMixin, _HTMLDocumentationLinkMixin, _MetadataRequester, _SetOutputMixin, object
    :show-inheritance:
-   :special-members: __init__
+
+   .. automethod:: __init__
