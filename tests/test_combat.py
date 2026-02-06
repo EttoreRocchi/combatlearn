@@ -7,7 +7,7 @@ from sklearn.preprocessing import StandardScaler
 from utils import simulate_covariate_data, simulate_data
 
 from combatlearn import ComBat
-from combatlearn.combat import ComBatModel
+from combatlearn.core import ComBatModel
 
 
 def test_transform_without_fit_raises():
