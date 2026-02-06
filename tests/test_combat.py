@@ -484,3 +484,172 @@ def test_compute_batch_metrics_no_pca_default():
     metrics = combat.compute_batch_metrics(X)
     assert metrics is not None
     assert "batch_effect" in metrics
+
+
+def test_feature_importance_shape():
+    """Test that feature_batch_importance returns correct shape."""
+    X, batch = simulate_data(n_samples=100, n_features=25)
+    combat = ComBat(batch=batch, method="johnson").fit(X)
+
+    importance = combat.feature_batch_importance()
+    assert importance.shape == (25, 3)
+    assert list(importance.columns) == ["location", "scale", "combined"]
+
+
+def test_feature_importance_location_rms():
+    """Test that location is RMS of gamma across batches."""
+    X, batch = simulate_data(n_samples=100, n_features=25)
+    combat = ComBat(batch=batch, method="johnson").fit(X)
+
+    importance = combat.feature_batch_importance()
+    gamma_star = combat._model._gamma_star
+    expected_location = np.sqrt((gamma_star**2).mean(axis=0))
+
+    # Sort to compare in same order
+    np.testing.assert_allclose(
+        importance.sort_index()["location"].values,
+        expected_location,
+        rtol=1e-10,
+    )
+
+
+def test_feature_importance_scale_rms():
+    """Test that scale is RMS of log(delta) across batches."""
+    X, batch = simulate_data(n_samples=100, n_features=25)
+    combat = ComBat(batch=batch, method="johnson").fit(X)
+
+    importance = combat.feature_batch_importance()
+    delta_star = combat._model._delta_star
+    expected_scale = np.sqrt((np.log(delta_star) ** 2).mean(axis=0))
+
+    np.testing.assert_allclose(
+        importance.sort_index()["scale"].values,
+        expected_scale,
+        rtol=1e-10,
+    )
+
+
+def test_feature_importance_combined_euclidean():
+    """Test that combined is Euclidean norm of location and scale."""
+    X, batch = simulate_data(n_samples=100, n_features=25)
+    combat = ComBat(batch=batch, method="johnson").fit(X)
+
+    importance = combat.feature_batch_importance()
+    expected_combined = np.sqrt(importance["location"] ** 2 + importance["scale"] ** 2)
+
+    np.testing.assert_allclose(
+        importance["combined"].values,
+        expected_combined.values,
+        rtol=1e-10,
+    )
+
+
+def test_feature_importance_mean_only_zero_scale():
+    """Test that scale is zero when mean_only=True."""
+    X, batch = simulate_data(n_samples=100, n_features=25)
+    combat = ComBat(batch=batch, method="johnson", mean_only=True).fit(X)
+
+    importance = combat.feature_batch_importance()
+
+    np.testing.assert_array_equal(importance["scale"].values, 0.0)
+    np.testing.assert_allclose(
+        importance["location"].values,
+        importance["combined"].values,
+        rtol=1e-10,
+    )
+
+
+def test_feature_importance_mode_magnitude():
+    """Test that magnitude mode returns raw values."""
+    X, batch = simulate_data(n_samples=100, n_features=25)
+    combat = ComBat(batch=batch, method="johnson").fit(X)
+
+    importance = combat.feature_batch_importance(mode="magnitude")
+
+    # Values should not sum to 1
+    assert importance["combined"].sum() != pytest.approx(1.0, rel=0.01)
+
+
+def test_feature_importance_mode_distribution_sums_to_one():
+    """Test that distribution mode normalizes each column to sum to 1."""
+    X, batch = simulate_data(n_samples=100, n_features=25)
+    combat = ComBat(batch=batch, method="johnson").fit(X)
+
+    importance = combat.feature_batch_importance(mode="distribution")
+
+    assert importance["location"].sum() == pytest.approx(1.0, rel=1e-10)
+    assert importance["scale"].sum() == pytest.approx(1.0, rel=1e-10)
+    assert importance["combined"].sum() == pytest.approx(1.0, rel=1e-10)
+
+
+def test_feature_importance_invalid_mode_raises():
+    """Test that invalid mode raises ValueError."""
+    X, batch = simulate_data(n_samples=100, n_features=25)
+    combat = ComBat(batch=batch, method="johnson").fit(X)
+
+    with pytest.raises(ValueError, match="mode must be"):
+        combat.feature_batch_importance(mode="invalid")
+
+
+def test_plot_feature_importance_kind_location():
+    """Test plot_feature_importance with kind='location'."""
+    X, batch = simulate_data(n_samples=100, n_features=25)
+    combat = ComBat(batch=batch, method="johnson").fit(X)
+
+    fig = combat.plot_feature_importance(kind="location")
+    assert fig is not None
+
+
+def test_plot_feature_importance_kind_scale():
+    """Test plot_feature_importance with kind='scale'."""
+    X, batch = simulate_data(n_samples=100, n_features=25)
+    combat = ComBat(batch=batch, method="johnson").fit(X)
+
+    fig = combat.plot_feature_importance(kind="scale")
+    assert fig is not None
+
+
+def test_plot_feature_importance_kind_combined_grouped():
+    """Test plot_feature_importance with kind='combined' shows grouped bars."""
+    X, batch = simulate_data(n_samples=100, n_features=25)
+    combat = ComBat(batch=batch, method="johnson").fit(X)
+
+    fig = combat.plot_feature_importance(kind="combined")
+    assert fig is not None
+
+    # Check that figure has axes with legend (grouped bars have legend)
+    ax = fig.axes[0]
+    legend = ax.get_legend()
+    assert legend is not None
+
+
+def test_plot_feature_importance_mode_magnitude():
+    """Test plot_feature_importance with mode='magnitude'."""
+    X, batch = simulate_data(n_samples=100, n_features=25)
+    combat = ComBat(batch=batch, method="johnson").fit(X)
+
+    fig = combat.plot_feature_importance(mode="magnitude")
+    assert fig is not None
+
+
+def test_plot_feature_importance_mode_distribution():
+    """Test plot_feature_importance with mode='distribution'."""
+    X, batch = simulate_data(n_samples=100, n_features=25)
+    combat = ComBat(batch=batch, method="johnson").fit(X)
+
+    fig = combat.plot_feature_importance(mode="distribution")
+    assert fig is not None
+
+
+def test_plot_feature_importance_distribution_shows_cumulative(capsys):
+    """Test that distribution mode prints cumulative contribution."""
+    X, batch = simulate_data(n_samples=100, n_features=25)
+    combat = ComBat(batch=batch, method="johnson").fit(X)
+
+    fig = combat.plot_feature_importance(mode="distribution", top_n=10)
+    assert fig is not None
+
+    # Check that cumulative percentage is printed to stdout
+    captured = capsys.readouterr()
+    assert "features explain" in captured.out
+    assert "%" in captured.out

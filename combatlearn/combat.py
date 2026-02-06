@@ -1,6 +1,6 @@
 """ComBat algorithm.
 
-`ComBatModel` implements both:
+`ComBatModel` implements three variants of the ComBat algorithm:
     * Johnson et al. (2007) vanilla ComBat (method="johnson")
     * Fortin et al. (2018) extension with covariates (method="fortin")
     * Chen et al. (2022) CovBat (method="chen")
@@ -1766,5 +1766,220 @@ class ComBat(BaseEstimator, TransformerMixin):
                 yaxis_title=axis_labels[1],
                 zaxis_title=axis_labels[2],
             )
+
+        return fig
+
+    def feature_batch_importance(
+        self,
+        mode: Literal["magnitude", "distribution"] = "magnitude",
+    ) -> pd.DataFrame:
+        """Compute per-feature batch effect magnitude.
+
+        Returns DataFrame with columns: 'location', 'scale', 'combined'
+        - location: RMS of gamma across batches (standardized mean shifts)
+        - scale: RMS of log(delta) across batches (log-fold variance change)
+        - combined: sqrt(location**2 + scale**2) - Euclidean norm treating
+          location and scale as orthogonal dimensions
+
+        Using RMS (root mean square) provides L2-consistent aggregation.
+        Using log(delta) ensures symmetry: delta=2 and delta=0.5
+        represent equally strong effects in opposite directions.
+
+        Parameters
+        ----------
+        mode : {'magnitude', 'distribution'}, default='magnitude'
+            - 'magnitude': Returns L2-consistent absolute batch effect magnitudes.
+              Suitable for ranking, thresholding, and cross-dataset comparison.
+            - 'distribution': Returns column-wise normalized proportions (each column
+              sums to 1, values in range [0, 1]), representing the relative contribution
+              of each feature to the total location, scale, or combined batch effect.
+              Note: normalization is applied independently to each column, so the
+              Euclidean relationship (combined**2 = location**2 + scale**2) no longer holds.
+
+        Returns
+        -------
+        pd.DataFrame
+            DataFrame with index=feature names, columns=['location', 'scale', 'combined'],
+            sorted by 'combined' descending.
+
+        Raises
+        ------
+        ValueError
+            If the model is not fitted or if mode is invalid.
+        """
+        if not hasattr(self._model, "_gamma_star"):
+            raise ValueError(
+                "This ComBat instance is not fitted yet. "
+                "Call 'fit' before 'feature_batch_importance'."
+            )
+
+        if mode not in ["magnitude", "distribution"]:
+            raise ValueError(f"mode must be 'magnitude' or 'distribution', got '{mode}'")
+
+        feature_names = self._model._grand_mean.index
+        gamma_star = self._model._gamma_star
+        delta_star = self._model._delta_star
+
+        # Location effect: RMS of gamma across batches (L2 aggregation)
+        location = np.sqrt((gamma_star**2).mean(axis=0))
+
+        # Scale effect: RMS of log(delta) across batches
+        if not self.mean_only:
+            scale = np.sqrt((np.log(delta_star) ** 2).mean(axis=0))
+        else:
+            scale = np.zeros_like(location)
+
+        # Euclidean to treat location and scale as orthogonal dimensions
+        combined = np.sqrt(location**2 + scale**2)
+
+        if mode == "distribution":
+            # Normalize each column independently to sum to 1
+            location_sum = location.sum()
+            scale_sum = scale.sum()
+            combined_sum = combined.sum()
+
+            location = location / location_sum if location_sum > 0 else location
+            scale = scale / scale_sum if scale_sum > 0 else scale
+            combined = combined / combined_sum if combined_sum > 0 else combined
+
+        return pd.DataFrame(
+            {
+                "location": location,
+                "scale": scale,
+                "combined": combined,
+            },
+            index=feature_names,
+        ).sort_values("combined", ascending=False)
+
+    def plot_feature_importance(
+        self,
+        top_n: int = 20,
+        kind: Literal["location", "scale", "combined"] = "combined",
+        mode: Literal["magnitude", "distribution"] = "magnitude",
+        figsize: tuple[int, int] = (8, 10),
+    ) -> Any:
+        """Plot top features affected by batch effects.
+
+        Parameters
+        ----------
+        top_n : int, default=20
+            Number of top features to display.
+        kind : {'location', 'scale', 'combined'}, default='combined'
+            - 'location': bar plot of location (mean shift) contribution only
+            - 'scale': bar plot of scale (variance) contribution only
+            - 'combined': grouped bar plot showing location and scale
+              side-by-side for each feature (sorted by Euclidean magnitude).
+              In magnitude mode: bars reflect Euclidean decomposition
+              (combined**2 = location**2 + scale**2).
+              In distribution mode: bars reflect independent normalized
+              contributions (each sums to 1 separately).
+        mode : {'magnitude', 'distribution'}, default='magnitude'
+            - 'magnitude': y-axis shows absolute batch effect magnitude
+            - 'distribution': y-axis shows relative contribution (proportion), includes
+              annotation showing cumulative contribution of top_n features
+              (e.g., "Top 20 features explain 75% of total batch effect")
+        figsize : tuple, default=(8,10)
+            Figure size (width, height) in inches.
+
+        Returns
+        -------
+        matplotlib.figure.Figure
+            The figure object containing the plot.
+
+        Raises
+        ------
+        ValueError
+            If the model is not fitted, or if kind/mode is invalid.
+        """
+        if not hasattr(self._model, "_gamma_star"):
+            raise ValueError(
+                "This ComBat instance is not fitted yet. "
+                "Call 'fit' before 'plot_feature_importance'."
+            )
+
+        if kind not in ["location", "scale", "combined"]:
+            raise ValueError(f"kind must be 'location', 'scale', or 'combined', got '{kind}'")
+
+        if mode not in ["magnitude", "distribution"]:
+            raise ValueError(f"mode must be 'magnitude' or 'distribution', got '{mode}'")
+
+        importance_df = self.feature_batch_importance(mode=mode)
+        top_features = importance_df.head(top_n)
+
+        # Reverse so highest values are at the top of the horizontal bar plot
+        top_features = top_features.iloc[::-1]
+
+        fig, ax = plt.subplots(figsize=figsize)
+
+        if kind == "combined":
+            # Grouped horizontal bar plot showing location and scale side-by-side
+            y = np.arange(len(top_features))
+            height = 0.35
+
+            ax.barh(
+                y + height / 2,
+                top_features["location"],
+                height,
+                label="Location",
+                color="steelblue",
+                edgecolor="black",
+                linewidth=0.5,
+            )
+            ax.barh(
+                y - height / 2,
+                top_features["scale"],
+                height,
+                label="Scale",
+                color="coral",
+                edgecolor="black",
+                linewidth=0.5,
+            )
+
+            ax.set_yticks(y)
+            ax.set_yticklabels(top_features.index)
+            ax.legend()
+        else:
+            # Single horizontal bar plot for location or scale
+            color = "steelblue" if kind == "location" else "coral"
+            ax.barh(
+                range(len(top_features)),
+                top_features[kind],
+                color=color,
+                edgecolor="black",
+                linewidth=0.5,
+            )
+            ax.set_yticks(range(len(top_features)))
+            ax.set_yticklabels(top_features.index)
+
+        # Set labels and title
+        ax.set_ylabel("Feature")
+        if mode == "magnitude":
+            ax.set_xlabel("Batch Effect Magnitude (RMS)")
+            title = f"Top {top_n} Features by Batch Effect"
+        else:
+            ax.set_xlabel("Relative Contribution")
+            title = f"Top {top_n} Features by Batch Effect (Distribution)"
+
+        if kind == "combined":
+            title += " (Location & Scale)"
+        else:
+            title += f" ({kind.capitalize()})"
+
+        ax.set_title(title)
+        plt.tight_layout()
+
+        # For distribution mode, print cumulative contribution
+        if mode == "distribution":
+            if kind == "combined":
+                cumulative_pct = top_features["combined"].sum() * 100
+                effect_label = "batch effect"
+            elif kind == "location":
+                cumulative_pct = top_features["location"].sum() * 100
+                effect_label = "location effect"
+            else:  # scale
+                cumulative_pct = top_features["scale"].sum() * 100
+                effect_label = "scale effect"
+
+            print(f"Top {top_n} features explain {cumulative_pct:.1f}% of total {effect_label}")
 
         return fig
