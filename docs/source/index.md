@@ -88,13 +88,31 @@ pip install combatlearn
 
 ## Citation
 
-If combatlearn is useful in your research, please cite the original ComBat papers:
+If **combatlearn** is useful in your research, please cite the paper introducing this Python package:
 
-- **Johnson et al. (2007)**: [Adjusting batch effects in microarray expression data using empirical Bayes methods](https://doi.org/10.1093/biostatistics/kxj037). *Biostatistics*, 8(1):118-27.
+> Rocchi, E., Nicitra, E., Calvo, M. et al. Combining mass spectrometry and machine learning models for predicting Klebsiella pneumoniae antimicrobial resistance: a multicenter experience from clinical isolates in Italy. BMC Microbiol (2026). https://doi.org/10.1186/s12866-025-04657-2
 
-- **Fortin et al. (2018)**: [Harmonization of cortical thickness measurements across scanners and sites](https://doi.org/10.1016/j.neuroimage.2017.11.024). *Neuroimage*, 167:104-120.
+```bibtex
+@article{Rocchi2026,
+  author    = {Rocchi, Ettore and Nicitra, Emanuele and Calvo, Maddalena and Cento, Valeria and Peiretti, Laura and Asif, Zian and Menchinelli, Giulia and Posteraro, Brunella and Sala, Claudia and Colosimo, Claudia and Cricca, Monica and Sambri, Vittorio and Sanguinetti, Maurizio and Castellani, Gastone and Stefani, Stefania},
+  title     = {Combining mass spectrometry and machine learning models for predicting Klebsiella pneumoniae antimicrobial resistance: a multicenter experience from clinical isolates in Italy},
+  journal   = {BMC Microbiology},
+  year      = {2026},
+  doi       = {10.1186/s12866-025-04657-2},
+  url       = {https://doi.org/10.1186/s12866-025-04657-2}
+}
+```
 
-- **Chen et al. (2022)**: [Mitigating site effects in covariance for machine learning in neuroimaging data](https://doi.org/10.1002/hbm.25688). *Hum Brain Mapp*, 43(4):1179-1195.
+## Acknowledgements
+
+This project builds on the excellent work of the ComBat family of harmonisation methods.
+Please consider citing the original papers:
+
+- [**ComBat**](https://rdrr.io/bioc/sva/man/ComBat.html) - Johnson WE, Li C, Rabinovic A. _Biostatistics_. 2007. doi: [10.1093/biostatistics/kxj037](https://doi.org/10.1093/biostatistics/kxj037)
+
+- [**neuroCombat**](https://github.com/Jfortin1/neuroCombat) - Fortin JP et al. _Neuroimage_. 2018. doi: [10.1016/j.neuroimage.2017.11.024](https://doi.org/10.1016/j.neuroimage.2017.11.024)
+
+- [**CovBat**](https://github.com/andy1764/CovBat_Harmonization) - Chen AA et al. _Hum Brain Mapp_. 2022. doi: [10.1002/hbm.25688](https://doi.org/10.1002/hbm.25688)
 
 ## Author
 
