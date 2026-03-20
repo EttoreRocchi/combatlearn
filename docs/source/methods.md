@@ -1,4 +1,4 @@
-# ComBat Methods
+# Method Guide
 
 combatlearn implements three variants of the ComBat algorithm. This guide helps you choose the right method for your use case.
 
@@ -218,4 +218,4 @@ Samples in the reference batch remain unchanged after correction.
 
 ## Next Steps
 
-- See the [API Reference](api.rst) for complete parameter documentation
+- See the [API Reference](api) for complete parameter documentation

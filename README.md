@@ -43,7 +43,7 @@ from combatlearn import ComBat
 df = pd.read_csv("data.csv", index_col=0)
 X, y = df.drop(columns="y"), df["y"]
 
-batch = pd.read_csv("batch.csv", index_col=0, squeeze=True)
+batch = pd.read_csv("batch.csv", index_col=0).squeeze("columns")
 diag = pd.read_csv("diagnosis.csv", index_col=0) # categorical
 age = pd.read_csv("age.csv", index_col=0) # continuous
 

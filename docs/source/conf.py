@@ -9,7 +9,7 @@ sys.path.insert(0, os.path.abspath("../.."))
 
 # -- Project information -----------------------------------------------------
 project = "combatlearn"
-copyright = "2025, Ettore Rocchi"
+copyright = "2025-2026, Ettore Rocchi"
 author = "Ettore Rocchi"
 
 # Get version from package
@@ -24,7 +24,7 @@ extensions = [
     "sphinx.ext.viewcode",
     "sphinx.ext.intersphinx",
     "sphinx.ext.mathjax",
-    "myst_parser",
+    "myst_nb",
     "sphinx_copybutton",
     "sphinx.ext.autosummary",
 ]
@@ -46,6 +46,9 @@ myst_enable_extensions = [
 ]
 
 myst_heading_anchors = 3
+
+# myst-nb: render pre-executed notebooks without re-running them
+nb_execution_mode = "off"
 
 # Napoleon settings (for NumPy docstrings)
 napoleon_google_docstring = False
@@ -80,10 +83,11 @@ intersphinx_mapping = {
     "sklearn": ("https://scikit-learn.org/stable/", None),
 }
 
-# Source file suffixes
+# Source file suffixes (myst-nb handles .md and .ipynb automatically)
 source_suffix = {
     ".rst": "restructuredtext",
-    ".md": "markdown",
+    ".md": "myst-nb",
+    ".ipynb": "myst-nb",
 }
 
 # Templates and exclusions
