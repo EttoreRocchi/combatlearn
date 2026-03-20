@@ -10,6 +10,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
+import seaborn as sns
 import umap
 from plotly.subplots import make_subplots
 from sklearn.decomposition import PCA
@@ -59,11 +60,30 @@ class ComBatVisualizationMixin:
             - `'static'`: matplotlib plots (can be saved as images)
             - `'interactive'`: plotly plots (explorable, requires plotly)
 
+        figsize : tuple of int, default=(12, 5)
+            Figure size in inches (width, height). Only used for static plots.
+
+        alpha : float, default=0.7
+            Marker transparency. Only used for static plots.
+
+        point_size : int, default=50
+            Marker size. Only used for static plots.
+
+        cmap : str, default='Set1'
+            Matplotlib colormap name for batch colors.
+
+        title : str or None, default=None
+            Custom figure title. If None, a default title is generated.
+
+        show_legend : bool, default=True
+            Whether to display the batch legend.
+
         return_embeddings : bool, default=False
             If `True`, return embeddings along with the plot.
 
         **reduction_kwargs : dict
-            Additional parameters for reduction methods.
+            Additional keyword arguments passed to the reduction method
+            (e.g., ``perplexity`` for t-SNE, ``n_neighbors`` for UMAP).
 
         Returns
         -------
@@ -75,7 +95,7 @@ class ComBatVisualizationMixin:
             - `'original'`: embedding of original data
             - `'transformed'`: embedding of ComBat-transformed data
         """
-        if not hasattr(self._model, "_gamma_star"):
+        if not hasattr(self, "_model") or not hasattr(self._model, "_gamma_star"):
             raise ValueError(
                 "This ComBat instance is not fitted yet. Call 'fit' before 'plot_transformation'."
             )
@@ -439,7 +459,7 @@ class ComBatVisualizationMixin:
         ValueError
             If the model is not fitted, or if kind/mode is invalid.
         """
-        if not hasattr(self._model, "_gamma_star"):
+        if not hasattr(self, "_model") or not hasattr(self._model, "_gamma_star"):
             raise ValueError(
                 "This ComBat instance is not fitted yet. "
                 "Call 'fit' before 'plot_feature_importance'."
@@ -530,4 +550,94 @@ class ComBatVisualizationMixin:
 
             print(f"Top {top_n} features explain {cumulative_pct:.1f}% of total {effect_label}")
 
+        return fig
+
+    def plot_batch_effect_heatmap(
+        self,
+        top_n: int = 50,
+        figsize: tuple[int, int] = (12, 8),
+    ) -> Any:
+        """Plot a heatmap of batch effect parameters across features and batches.
+
+        Displays the estimated batch-specific location shifts (gamma) and,
+        unless ``mean_only=True``, log-scale shifts (log delta) for the
+        ``top_n`` most affected features.
+
+        Parameters
+        ----------
+        top_n : int, default=50
+            Number of top features (by combined batch effect) to display.
+        figsize : tuple of int, default=(12, 8)
+            Figure size in inches.
+
+        Returns
+        -------
+        matplotlib.figure.Figure
+            Figure containing the heatmap(s).
+
+        Raises
+        ------
+        ValueError
+            If the model is not fitted.
+        ImportError
+            If seaborn is not installed.
+        """
+        if not hasattr(self, "_model") or not hasattr(self._model, "_gamma_star"):
+            raise ValueError(
+                "This ComBat instance is not fitted yet. "
+                "Call 'fit' before 'plot_batch_effect_heatmap'."
+            )
+
+        feature_names = self._model._grand_mean.index
+        batch_levels = self._model._batch_levels
+        gamma_star = self._model._gamma_star
+        delta_star = self._model._delta_star
+
+        importance = self.feature_batch_importance()
+        top_features = importance.head(top_n).index
+        feat_idx = [feature_names.get_loc(f) for f in top_features]
+
+        gamma_df = pd.DataFrame(
+            gamma_star[:, feat_idx],
+            index=[str(b) for b in batch_levels],
+            columns=top_features,
+        )
+
+        n_plots = 1 if self.mean_only else 2
+        fig, axes = plt.subplots(1, n_plots, figsize=figsize)
+        if n_plots == 1:
+            axes = [axes]
+
+        sns.heatmap(
+            gamma_df,
+            cmap="RdBu_r",
+            center=0,
+            ax=axes[0],
+            xticklabels=True,
+            yticklabels=True,
+        )
+        axes[0].set_title("Location shifts (gamma)")
+        axes[0].set_xlabel("Feature")
+        axes[0].set_ylabel("Batch")
+
+        if not self.mean_only:
+            log_delta_df = pd.DataFrame(
+                np.log(delta_star[:, feat_idx]),
+                index=[str(b) for b in batch_levels],
+                columns=top_features,
+            )
+            sns.heatmap(
+                log_delta_df,
+                cmap="RdBu_r",
+                center=0,
+                ax=axes[1],
+                xticklabels=True,
+                yticklabels=True,
+            )
+            axes[1].set_title("Scale shifts (log delta)")
+            axes[1].set_xlabel("Feature")
+            axes[1].set_ylabel("Batch")
+
+        fig.suptitle(f"Batch Effect Heatmap (top {top_n} features)", fontsize=14, fontweight="bold")
+        plt.tight_layout()
         return fig

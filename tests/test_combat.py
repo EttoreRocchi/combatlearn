@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 import pytest
 from sklearn.base import clone
+from sklearn.exceptions import NotFittedError
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from utils import simulate_covariate_data, simulate_data
@@ -653,3 +654,198 @@ def test_plot_feature_importance_distribution_shows_cumulative(capsys):
     captured = capsys.readouterr()
     assert "features explain" in captured.out
     assert "%" in captured.out
+
+
+def test_fit_nan_in_X_raises():
+    """Fitting with NaN in X must raise ValueError."""
+    X, batch = simulate_data()
+    X.iloc[0, 0] = np.nan
+    with pytest.raises(ValueError):
+        ComBat(batch=batch).fit(X)
+
+
+def test_fit_inf_in_X_raises():
+    """Fitting with Inf in X must raise ValueError."""
+    X, batch = simulate_data()
+    X.iloc[0, 0] = np.inf
+    with pytest.raises(ValueError):
+        ComBat(batch=batch).fit(X)
+
+
+def test_transform_nan_in_X_raises():
+    """Transforming with NaN in X must raise ValueError."""
+    X, batch = simulate_data()
+    combat = ComBat(batch=batch).fit(X)
+    X_bad = X.copy()
+    X_bad.iloc[0, 0] = np.nan
+    with pytest.raises(ValueError):
+        combat.transform(X_bad)
+
+
+def test_fit_nan_in_batch_raises():
+    """Fitting with NaN in batch must raise ValueError."""
+    X, batch = simulate_data()
+    batch.iloc[0] = np.nan
+    with pytest.raises(ValueError, match="batch contains NaN"):
+        ComBat(batch=batch).fit(X)
+
+
+def test_fit_nan_in_discrete_covariates_raises():
+    """Fitting with NaN in discrete covariates must raise ValueError."""
+    X, batch, disc, cont = simulate_covariate_data()
+    disc.iloc[0, 0] = np.nan
+    with pytest.raises(ValueError, match="discrete_covariates contains NaN"):
+        ComBat(
+            batch=batch, discrete_covariates=disc, continuous_covariates=cont, method="fortin"
+        ).fit(X)
+
+
+def test_fit_nan_in_continuous_covariates_raises():
+    """Fitting with NaN in continuous covariates must raise ValueError."""
+    X, batch, disc, cont = simulate_covariate_data()
+    cont.iloc[0, 0] = np.nan
+    with pytest.raises(ValueError):
+        ComBat(
+            batch=batch, discrete_covariates=disc, continuous_covariates=cont, method="fortin"
+        ).fit(X)
+
+
+def test_metrics_nn_algorithm_ball_tree():
+    """compute_batch_metrics with nn_algorithm='ball_tree' must work."""
+    X, batch = simulate_data(n_samples=100, n_features=20)
+    combat = ComBat(batch=batch).fit(X)
+    metrics = combat.compute_batch_metrics(X, k_neighbors=[5], nn_algorithm="ball_tree")
+    assert "batch_effect" in metrics
+
+
+def test_metrics_nn_algorithm_kd_tree():
+    """compute_batch_metrics with nn_algorithm='kd_tree' must work."""
+    X, batch = simulate_data(n_samples=100, n_features=20)
+    combat = ComBat(batch=batch).fit(X)
+    metrics = combat.compute_batch_metrics(X, k_neighbors=[5], nn_algorithm="kd_tree")
+    assert "batch_effect" in metrics
+
+
+def test_metrics_nn_algorithm_brute():
+    """compute_batch_metrics with nn_algorithm='brute' must work."""
+    X, batch = simulate_data(n_samples=100, n_features=20)
+    combat = ComBat(batch=batch).fit(X)
+    metrics = combat.compute_batch_metrics(X, k_neighbors=[5], nn_algorithm="brute")
+    assert "batch_effect" in metrics
+
+
+def test_metrics_nn_algorithm_invalid_raises():
+    """compute_batch_metrics with invalid nn_algorithm must raise ValueError."""
+    X, batch = simulate_data(n_samples=100, n_features=20)
+    combat = ComBat(batch=batch).fit(X)
+    with pytest.raises(ValueError, match="nn_algorithm"):
+        combat.compute_batch_metrics(X, nn_algorithm="invalid")
+
+
+def test_get_feature_names_out_dataframe():
+    """get_feature_names_out returns column names from DataFrame input."""
+    X, batch = simulate_data(n_samples=100, n_features=10)
+    X.columns = [f"feat_{i}" for i in range(10)]
+    combat = ComBat(batch=batch).fit(X)
+    names = combat.get_feature_names_out()
+    assert list(names) == [f"feat_{i}" for i in range(10)]
+
+
+def test_get_feature_names_out_ndarray():
+    """get_feature_names_out returns default names for numpy input."""
+    X, batch = simulate_data(n_samples=100, n_features=10)
+    combat = ComBat(batch=batch).fit(X.values)
+    names = combat.get_feature_names_out()
+    assert list(names) == [f"x{i}" for i in range(10)]
+
+
+def test_get_feature_names_out_not_fitted_raises():
+    """get_feature_names_out before fit raises NotFittedError."""
+    _X, batch = simulate_data()
+    combat = ComBat(batch=batch)
+    with pytest.raises(NotFittedError):
+        combat.get_feature_names_out()
+
+
+def test_set_output_pandas_in_pipeline():
+    """Pipeline with set_output(transform='pandas') works with ComBat."""
+    X, batch = simulate_data(n_samples=100, n_features=10)
+    X.columns = [f"feat_{i}" for i in range(10)]
+    pipe = Pipeline([("combat", ComBat(batch=batch))])
+    pipe.set_output(transform="pandas")
+    result = pipe.fit_transform(X)
+    assert isinstance(result, pd.DataFrame)
+    assert list(result.columns) == [f"feat_{i}" for i in range(10)]
+
+
+def test_summary_contains_method():
+    """summary() output contains the method name."""
+    X, batch = simulate_data()
+    combat = ComBat(batch=batch, method="johnson").fit(X)
+    s = combat.summary()
+    assert "johnson" in s
+
+
+def test_summary_contains_batch_info():
+    """summary() output contains batch count and sample counts."""
+    X, batch = simulate_data()
+    combat = ComBat(batch=batch).fit(X)
+    s = combat.summary()
+    assert "Number of batches: 3" in s
+    assert "A:" in s
+    assert "B:" in s
+    assert "C:" in s
+
+
+def test_summary_not_fitted_raises():
+    """summary() before fit raises ValueError."""
+    _X, batch = simulate_data()
+    combat = ComBat(batch=batch)
+    with pytest.raises(ValueError, match="not fitted"):
+        combat.summary()
+
+
+def test_heatmap_returns_figure():
+    """plot_batch_effect_heatmap returns a matplotlib Figure."""
+    import matplotlib.figure
+
+    X, batch = simulate_data(n_samples=100, n_features=25)
+    combat = ComBat(batch=batch).fit(X)
+    fig = combat.plot_batch_effect_heatmap(top_n=10)
+    assert isinstance(fig, matplotlib.figure.Figure)
+
+
+def test_heatmap_top_n():
+    """plot_batch_effect_heatmap respects top_n parameter."""
+    X, batch = simulate_data(n_samples=100, n_features=25)
+    combat = ComBat(batch=batch).fit(X)
+    fig = combat.plot_batch_effect_heatmap(top_n=10)
+    # With mean_only=False, 2 subplots
+    assert len(fig.axes) >= 2
+
+
+def test_heatmap_mean_only():
+    """plot_batch_effect_heatmap with mean_only=True shows only 1 heatmap."""
+    X, batch = simulate_data(n_samples=100, n_features=25)
+    combat = ComBat(batch=batch, mean_only=True).fit(X)
+    fig = combat.plot_batch_effect_heatmap(top_n=10)
+    # mean_only → 1 subplot (gamma only), but colorbar adds an extra axis
+    # so check the first axis title
+    assert "gamma" in fig.axes[0].get_title().lower()
+
+
+def test_heatmap_not_fitted_raises():
+    """plot_batch_effect_heatmap before fit raises ValueError."""
+    _X, batch = simulate_data()
+    combat = ComBat(batch=batch)
+    with pytest.raises(ValueError, match="not fitted"):
+        combat.plot_batch_effect_heatmap()
+
+
+def test_set_params_updates_method():
+    """set_params must propagate to the model created at fit time."""
+    X, batch = simulate_data()
+    combat = ComBat(batch=batch, method="johnson")
+    combat.set_params(method="fortin")
+    combat.fit(X)
+    assert combat._model.method == "fortin"

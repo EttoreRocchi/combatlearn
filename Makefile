@@ -53,7 +53,7 @@ pre-commit:  ## Run the full pre-commit suite on all files
 # Tests
 
 test:  ## Run tests
-	@$(PYTEST) $(TESTS)/
+	@$(PYTEST) -v $(TESTS)/
 
 test-cov:  ## Run tests with coverage report
 	@$(PYTEST) $(TESTS)/ --cov=$(SRC) --cov-report=term-missing

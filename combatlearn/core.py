@@ -117,7 +117,26 @@ class ComBatModel:
         discrete_covariates: ArrayLike | None = None,
         continuous_covariates: ArrayLike | None = None,
     ) -> ComBatModel:
-        """Fit the ComBat model."""
+        """Fit the ComBat model.
+
+        Parameters
+        ----------
+        X : array-like of shape (n_samples, n_features)
+            Input data to fit.
+        y : None
+            Ignored. Present for API compatibility.
+        batch : array-like of shape (n_samples,)
+            Batch labels for each sample.
+        discrete_covariates : array-like or None, default=None
+            Categorical covariates to protect (Fortin/Chen only).
+        continuous_covariates : array-like or None, default=None
+            Continuous covariates to protect (Fortin/Chen only).
+
+        Returns
+        -------
+        self : ComBatModel
+            Fitted model.
+        """
         method = self.method.lower()
         if method not in {"johnson", "fortin", "chen"}:
             raise ValueError("method must be 'johnson', 'fortin', or 'chen'.")
@@ -459,7 +478,29 @@ class ComBatModel:
         discrete_covariates: ArrayLike | None = None,
         continuous_covariates: ArrayLike | None = None,
     ) -> pd.DataFrame:
-        """Transform the data using fitted ComBat parameters."""
+        """Transform the data using fitted ComBat parameters.
+
+        Parameters
+        ----------
+        X : array-like of shape (n_samples, n_features)
+            Input data to transform.
+        batch : array-like of shape (n_samples,)
+            Batch labels for each sample.
+        discrete_covariates : array-like or None, default=None
+            Categorical covariates (Fortin/Chen only).
+        continuous_covariates : array-like or None, default=None
+            Continuous covariates (Fortin/Chen only).
+
+        Returns
+        -------
+        X_adjusted : pd.DataFrame
+            Batch-corrected data.
+
+        Raises
+        ------
+        ValueError
+            If the model is not fitted or if unseen batch levels are present.
+        """
         if not hasattr(self, "_gamma_star"):
             raise ValueError(
                 "This ComBatModel instance is not fitted yet. Call 'fit' before 'transform'."

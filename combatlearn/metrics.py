@@ -111,6 +111,7 @@ def _kbet_score(
     batch_labels: np.ndarray,
     k0: int,
     alpha: float = 0.05,
+    nn_algorithm: str = "auto",
 ) -> tuple[float, float]:
     """
     Compute kBET (k-nearest neighbor Batch Effect Test) acceptance rate.
@@ -130,6 +131,9 @@ def _kbet_score(
         Neighborhood size.
     alpha : float
         Significance level for chi-squared test.
+    nn_algorithm : {'auto', 'ball_tree', 'kd_tree', 'brute'}, default='auto'
+        Algorithm used for nearest neighbor computation. Passed to
+        ``sklearn.neighbors.NearestNeighbors``.
 
     Returns
     -------
@@ -148,7 +152,7 @@ def _kbet_score(
     global_freq = batch_counts / n_samples
     k0 = min(k0, n_samples - 1)
 
-    nn = NearestNeighbors(n_neighbors=k0 + 1, algorithm="auto")
+    nn = NearestNeighbors(n_neighbors=k0 + 1, algorithm=nn_algorithm)
     nn.fit(X)
     _, indices = nn.kneighbors(X)
 
@@ -236,6 +240,7 @@ def _lisi_score(
     X: np.ndarray,
     batch_labels: np.ndarray,
     perplexity: int = 30,
+    nn_algorithm: str = "auto",
 ) -> float:
     """
     Compute mean Local Inverse Simpson's Index (LISI).
@@ -253,6 +258,9 @@ def _lisi_score(
         Batch labels for each sample.
     perplexity : int
         Perplexity for Gaussian kernel.
+    nn_algorithm : {'auto', 'ball_tree', 'kd_tree', 'brute'}, default='auto'
+        Algorithm used for nearest neighbor computation. Passed to
+        ``sklearn.neighbors.NearestNeighbors``.
 
     Returns
     -------
@@ -269,7 +277,7 @@ def _lisi_score(
 
     k = min(3 * perplexity, n_samples - 1)
 
-    nn = NearestNeighbors(n_neighbors=k + 1, algorithm="auto")
+    nn = NearestNeighbors(n_neighbors=k + 1, algorithm=nn_algorithm)
     nn.fit(X)
     distances, indices = nn.kneighbors(X)
 
@@ -354,6 +362,7 @@ def _knn_preservation(
     X_after: np.ndarray,
     k_values: list[int],
     n_jobs: int = 1,
+    nn_algorithm: str = "auto",
 ) -> dict[int, float]:
     """
     Compute fraction of k-nearest neighbors preserved after correction.
@@ -371,6 +380,9 @@ def _knn_preservation(
         Values of k for k-NN.
     n_jobs : int
         Number of parallel jobs.
+    nn_algorithm : {'auto', 'ball_tree', 'kd_tree', 'brute'}, default='auto'
+        Algorithm used for nearest neighbor computation. Passed to
+        ``sklearn.neighbors.NearestNeighbors``.
 
     Returns
     -------
@@ -381,11 +393,11 @@ def _knn_preservation(
     max_k = max(k_values)
     max_k = min(max_k, X_before.shape[0] - 1)
 
-    nn_before = NearestNeighbors(n_neighbors=max_k + 1, algorithm="auto", n_jobs=n_jobs)
+    nn_before = NearestNeighbors(n_neighbors=max_k + 1, algorithm=nn_algorithm, n_jobs=n_jobs)
     nn_before.fit(X_before)
     _, indices_before = nn_before.kneighbors(X_before)
 
-    nn_after = NearestNeighbors(n_neighbors=max_k + 1, algorithm="auto", n_jobs=n_jobs)
+    nn_after = NearestNeighbors(n_neighbors=max_k + 1, algorithm=nn_algorithm, n_jobs=n_jobs)
     nn_after.fit(X_after)
     _, indices_after = nn_after.kneighbors(X_after)
 
@@ -557,6 +569,7 @@ class ComBatMetricsMixin:
         kbet_k0: int | None = None,
         lisi_perplexity: int = 30,
         n_jobs: int = 1,
+        nn_algorithm: str = "auto",
     ) -> dict[str, Any]:
         """
         Compute batch effect metrics before and after ComBat correction.
@@ -579,6 +592,9 @@ class ComBatMetricsMixin:
             Perplexity for LISI computation.
         n_jobs : int, default=1
             Number of parallel jobs for neighbor computations.
+        nn_algorithm : {'auto', 'ball_tree', 'kd_tree', 'brute'}, default='auto'
+            Algorithm used for nearest neighbor computation. Passed to
+            ``sklearn.neighbors.NearestNeighbors``.
 
         Returns
         -------
@@ -596,7 +612,11 @@ class ComBatMetricsMixin:
         ValueError
             If the model is not fitted or if pca_components is invalid.
         """
-        if not hasattr(self._model, "_gamma_star"):
+        _valid_nn = {"auto", "ball_tree", "kd_tree", "brute"}
+        if nn_algorithm not in _valid_nn:
+            raise ValueError(f"nn_algorithm must be one of {_valid_nn}, got '{nn_algorithm}'")
+
+        if not hasattr(self, "_model") or not hasattr(self._model, "_gamma_star"):
             raise ValueError(
                 "This ComBat instance is not fitted yet. Call 'fit' before 'compute_batch_metrics'."
             )
@@ -646,16 +666,22 @@ class ComBatMetricsMixin:
         db_before = _davies_bouldin_batch(X_before_pca, batch_labels)
         db_after = _davies_bouldin_batch(X_after_pca, batch_labels)
 
-        kbet_before, _ = _kbet_score(X_before_pca, batch_labels, kbet_k0)
-        kbet_after, _ = _kbet_score(X_after_pca, batch_labels, kbet_k0)
+        kbet_before, _ = _kbet_score(X_before_pca, batch_labels, kbet_k0, nn_algorithm=nn_algorithm)
+        kbet_after, _ = _kbet_score(X_after_pca, batch_labels, kbet_k0, nn_algorithm=nn_algorithm)
 
-        lisi_before = _lisi_score(X_before_pca, batch_labels, lisi_perplexity)
-        lisi_after = _lisi_score(X_after_pca, batch_labels, lisi_perplexity)
+        lisi_before = _lisi_score(
+            X_before_pca, batch_labels, lisi_perplexity, nn_algorithm=nn_algorithm
+        )
+        lisi_after = _lisi_score(
+            X_after_pca, batch_labels, lisi_perplexity, nn_algorithm=nn_algorithm
+        )
 
         var_ratio_before = _variance_ratio(X_before_pca, batch_labels)
         var_ratio_after = _variance_ratio(X_after_pca, batch_labels)
 
-        knn_results = _knn_preservation(X_before_pca, X_after_pca, k_neighbors, n_jobs)
+        knn_results = _knn_preservation(
+            X_before_pca, X_after_pca, k_neighbors, n_jobs, nn_algorithm=nn_algorithm
+        )
         dist_corr = _pairwise_distance_correlation(X_before_pca, X_after_pca)
 
         centroid_before = _mean_centroid_distance(X_before_pca, batch_labels)
@@ -743,7 +769,7 @@ class ComBatMetricsMixin:
         ValueError
             If the model is not fitted or if mode is invalid.
         """
-        if not hasattr(self._model, "_gamma_star"):
+        if not hasattr(self, "_model") or not hasattr(self._model, "_gamma_star"):
             raise ValueError(
                 "This ComBat instance is not fitted yet. "
                 "Call 'fit' before 'feature_batch_importance'."
