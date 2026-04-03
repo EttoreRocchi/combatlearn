@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any, Literal
 
 import numpy as np
+import numpy.typing as npt
 import pandas as pd
 from scipy.spatial.distance import pdist
 from scipy.stats import chi2, levene, spearmanr
@@ -16,10 +17,10 @@ from .core import ArrayLike
 
 
 def _compute_pca_embedding(
-    X_before: np.ndarray,
-    X_after: np.ndarray,
+    X_before: npt.NDArray[Any],
+    X_after: npt.NDArray[Any],
     n_components: int,
-) -> tuple[np.ndarray, np.ndarray, PCA]:
+) -> tuple[npt.NDArray[Any], npt.NDArray[Any], PCA]:
     """
     Compute PCA embeddings for both datasets.
 
@@ -27,18 +28,18 @@ def _compute_pca_embedding(
 
     Parameters
     ----------
-    X_before : np.ndarray
+    X_before : npt.NDArray[Any]
         Original data before correction.
-    X_after : np.ndarray
+    X_after : npt.NDArray[Any]
         Corrected data.
     n_components : int
         Number of PCA components.
 
     Returns
     -------
-    X_before_pca : np.ndarray
+    X_before_pca : npt.NDArray[Any]
         PCA-transformed original data.
-    X_after_pca : np.ndarray
+    X_after_pca : npt.NDArray[Any]
         PCA-transformed corrected data.
     pca : PCA
         Fitted PCA model.
@@ -50,7 +51,7 @@ def _compute_pca_embedding(
     return X_before_pca, X_after_pca, pca
 
 
-def _silhouette_batch(X: np.ndarray, batch_labels: np.ndarray) -> float:
+def _silhouette_batch(X: npt.NDArray[Any], batch_labels: npt.NDArray[Any]) -> float:
     """
     Compute silhouette coefficient using batch as cluster labels.
 
@@ -59,9 +60,9 @@ def _silhouette_batch(X: np.ndarray, batch_labels: np.ndarray) -> float:
 
     Parameters
     ----------
-    X : np.ndarray
+    X : npt.NDArray[Any]
         Data matrix.
-    batch_labels : np.ndarray
+    batch_labels : npt.NDArray[Any]
         Batch labels for each sample.
 
     Returns
@@ -73,12 +74,12 @@ def _silhouette_batch(X: np.ndarray, batch_labels: np.ndarray) -> float:
     if len(unique_batches) < 2:
         return 0.0
     try:
-        return silhouette_score(X, batch_labels, metric="euclidean")
+        return float(silhouette_score(X, batch_labels, metric="euclidean"))
     except Exception:
         return 0.0
 
 
-def _davies_bouldin_batch(X: np.ndarray, batch_labels: np.ndarray) -> float:
+def _davies_bouldin_batch(X: npt.NDArray[Any], batch_labels: npt.NDArray[Any]) -> float:
     """
     Compute Davies-Bouldin index using batch labels.
 
@@ -87,9 +88,9 @@ def _davies_bouldin_batch(X: np.ndarray, batch_labels: np.ndarray) -> float:
 
     Parameters
     ----------
-    X : np.ndarray
+    X : npt.NDArray[Any]
         Data matrix.
-    batch_labels : np.ndarray
+    batch_labels : npt.NDArray[Any]
         Batch labels for each sample.
 
     Returns
@@ -101,14 +102,14 @@ def _davies_bouldin_batch(X: np.ndarray, batch_labels: np.ndarray) -> float:
     if len(unique_batches) < 2:
         return 0.0
     try:
-        return davies_bouldin_score(X, batch_labels)
+        return float(davies_bouldin_score(X, batch_labels))
     except Exception:
         return 0.0
 
 
 def _kbet_score(
-    X: np.ndarray,
-    batch_labels: np.ndarray,
+    X: npt.NDArray[Any],
+    batch_labels: npt.NDArray[Any],
     k0: int,
     alpha: float = 0.05,
     nn_algorithm: str = "auto",
@@ -123,9 +124,9 @@ def _kbet_score(
 
     Parameters
     ----------
-    X : np.ndarray
+    X : npt.NDArray[Any]
         Data matrix.
-    batch_labels : np.ndarray
+    batch_labels : npt.NDArray[Any]
         Batch labels for each sample.
     k0 : int
         Neighborhood size.
@@ -187,10 +188,10 @@ def _kbet_score(
     acceptance_rate = np.mean(np.array(p_values) > alpha)
     mean_stat = np.mean(chi2_stats)
 
-    return acceptance_rate, mean_stat
+    return float(acceptance_rate), float(mean_stat)
 
 
-def _find_sigma(distances: np.ndarray, target_perplexity: float, tol: float = 1e-5) -> float:
+def _find_sigma(distances: npt.NDArray[Any], target_perplexity: float, tol: float = 1e-5) -> float:
     """
     Binary search for sigma to achieve target perplexity.
 
@@ -198,7 +199,7 @@ def _find_sigma(distances: np.ndarray, target_perplexity: float, tol: float = 1e
 
     Parameters
     ----------
-    distances : np.ndarray
+    distances : npt.NDArray[Any]
         Distances to neighbors.
     target_perplexity : float
         Target perplexity value.
@@ -219,7 +220,8 @@ def _find_sigma(distances: np.ndarray, target_perplexity: float, tol: float = 1e
         P = np.exp(-(distances**2) / (2 * sigma**2 + 1e-10))
         P_sum = P.sum()
         if P_sum < 1e-10:
-            sigma = (sigma + sigma_max) / 2
+            sigma_min = sigma
+            sigma = (sigma_min + sigma_max) / 2
             continue
         P = P / P_sum
         P = np.clip(P, 1e-10, 1.0)
@@ -237,8 +239,8 @@ def _find_sigma(distances: np.ndarray, target_perplexity: float, tol: float = 1e
 
 
 def _lisi_score(
-    X: np.ndarray,
-    batch_labels: np.ndarray,
+    X: npt.NDArray[Any],
+    batch_labels: npt.NDArray[Any],
     perplexity: int = 30,
     nn_algorithm: str = "auto",
 ) -> float:
@@ -252,9 +254,9 @@ def _lisi_score(
 
     Parameters
     ----------
-    X : np.ndarray
+    X : npt.NDArray[Any]
         Data matrix.
-    batch_labels : np.ndarray
+    batch_labels : npt.NDArray[Any]
         Batch labels for each sample.
     perplexity : int
         Perplexity for Gaussian kernel.
@@ -305,10 +307,10 @@ def _lisi_score(
         lisi = n_batches if simpson < 1e-10 else 1.0 / simpson
         lisi_values.append(lisi)
 
-    return np.mean(lisi_values)
+    return float(np.mean(lisi_values))
 
 
-def _variance_ratio(X: np.ndarray, batch_labels: np.ndarray) -> float:
+def _variance_ratio(X: npt.NDArray[Any], batch_labels: npt.NDArray[Any]) -> float:
     """
     Compute between-batch to within-batch variance ratio.
 
@@ -317,9 +319,9 @@ def _variance_ratio(X: np.ndarray, batch_labels: np.ndarray) -> float:
 
     Parameters
     ----------
-    X : np.ndarray
+    X : npt.NDArray[Any]
         Data matrix.
-    batch_labels : np.ndarray
+    batch_labels : npt.NDArray[Any]
         Batch labels for each sample.
 
     Returns
@@ -358,8 +360,8 @@ def _variance_ratio(X: np.ndarray, batch_labels: np.ndarray) -> float:
 
 
 def _knn_preservation(
-    X_before: np.ndarray,
-    X_after: np.ndarray,
+    X_before: npt.NDArray[Any],
+    X_after: npt.NDArray[Any],
     k_values: list[int],
     n_jobs: int = 1,
     nn_algorithm: str = "auto",
@@ -372,9 +374,9 @@ def _knn_preservation(
 
     Parameters
     ----------
-    X_before : np.ndarray
+    X_before : npt.NDArray[Any]
         Original data.
-    X_after : np.ndarray
+    X_after : npt.NDArray[Any]
         Corrected data.
     k_values : list of int
         Values of k for k-NN.
@@ -413,14 +415,14 @@ def _knn_preservation(
             overlap = len(neighbors_before & neighbors_after) / k
             overlaps.append(overlap)
 
-        results[k] = np.mean(overlaps)
+        results[k] = float(np.mean(overlaps))
 
     return results
 
 
 def _pairwise_distance_correlation(
-    X_before: np.ndarray,
-    X_after: np.ndarray,
+    X_before: npt.NDArray[Any],
+    X_after: npt.NDArray[Any],
     subsample: int = 1000,
     random_state: int = 42,
 ) -> float:
@@ -432,9 +434,9 @@ def _pairwise_distance_correlation(
 
     Parameters
     ----------
-    X_before : np.ndarray
+    X_before : npt.NDArray[Any]
         Original data.
-    X_after : np.ndarray
+    X_after : npt.NDArray[Any]
         Corrected data.
     subsample : int
         Maximum samples to use (for efficiency).
@@ -465,10 +467,10 @@ def _pairwise_distance_correlation(
     if np.isnan(corr):
         return 1.0
 
-    return corr
+    return float(corr)
 
 
-def _mean_centroid_distance(X: np.ndarray, batch_labels: np.ndarray) -> float:
+def _mean_centroid_distance(X: npt.NDArray[Any], batch_labels: npt.NDArray[Any]) -> float:
     """
     Compute mean pairwise Euclidean distance between batch centroids.
 
@@ -476,9 +478,9 @@ def _mean_centroid_distance(X: np.ndarray, batch_labels: np.ndarray) -> float:
 
     Parameters
     ----------
-    X : np.ndarray
+    X : npt.NDArray[Any]
         Data matrix.
-    batch_labels : np.ndarray
+    batch_labels : npt.NDArray[Any]
         Batch labels for each sample.
 
     Returns
@@ -498,13 +500,13 @@ def _mean_centroid_distance(X: np.ndarray, batch_labels: np.ndarray) -> float:
         centroid = np.mean(X[mask], axis=0)
         centroids.append(centroid)
 
-    centroids = np.array(centroids)
-    distances = pdist(centroids, metric="euclidean")
+    centroids_arr = np.array(centroids)
+    distances = pdist(centroids_arr, metric="euclidean")
 
-    return np.mean(distances)
+    return float(np.mean(distances))
 
 
-def _levene_median_statistic(X: np.ndarray, batch_labels: np.ndarray) -> float:
+def _levene_median_statistic(X: npt.NDArray[Any], batch_labels: npt.NDArray[Any]) -> float:
     """
     Compute median Levene test statistic across features.
 
@@ -512,9 +514,9 @@ def _levene_median_statistic(X: np.ndarray, batch_labels: np.ndarray) -> float:
 
     Parameters
     ----------
-    X : np.ndarray
+    X : npt.NDArray[Any]
         Data matrix.
-    batch_labels : np.ndarray
+    batch_labels : npt.NDArray[Any]
         Batch labels for each sample.
 
     Returns
@@ -542,7 +544,83 @@ def _levene_median_statistic(X: np.ndarray, batch_labels: np.ndarray) -> float:
     if len(levene_stats) == 0:
         return 0.0
 
-    return np.median(levene_stats)
+    return float(np.median(levene_stats))
+
+
+def _compute_batch_effect_metrics(
+    X_before: npt.NDArray[Any],
+    X_after: npt.NDArray[Any],
+    batch_labels: npt.NDArray[Any],
+    *,
+    kbet_k0: int,
+    lisi_perplexity: int,
+    nn_algorithm: str,
+) -> dict[str, Any]:
+    """Compute batch effect metrics (silhouette, DB, kBET, LISI, variance ratio)."""
+    n_batches = len(np.unique(batch_labels))
+
+    silhouette_before = _silhouette_batch(X_before, batch_labels)
+    silhouette_after = _silhouette_batch(X_after, batch_labels)
+
+    db_before = _davies_bouldin_batch(X_before, batch_labels)
+    db_after = _davies_bouldin_batch(X_after, batch_labels)
+
+    kbet_before, _ = _kbet_score(X_before, batch_labels, kbet_k0, nn_algorithm=nn_algorithm)
+    kbet_after, _ = _kbet_score(X_after, batch_labels, kbet_k0, nn_algorithm=nn_algorithm)
+
+    lisi_before = _lisi_score(X_before, batch_labels, lisi_perplexity, nn_algorithm=nn_algorithm)
+    lisi_after = _lisi_score(X_after, batch_labels, lisi_perplexity, nn_algorithm=nn_algorithm)
+
+    var_ratio_before = _variance_ratio(X_before, batch_labels)
+    var_ratio_after = _variance_ratio(X_after, batch_labels)
+
+    return {
+        "silhouette": {"before": silhouette_before, "after": silhouette_after},
+        "davies_bouldin": {"before": db_before, "after": db_after},
+        "kbet": {"before": kbet_before, "after": kbet_after},
+        "lisi": {"before": lisi_before, "after": lisi_after, "max_value": n_batches},
+        "variance_ratio": {"before": var_ratio_before, "after": var_ratio_after},
+    }
+
+
+def _compute_preservation_metrics(
+    X_before: npt.NDArray[Any],
+    X_after: npt.NDArray[Any],
+    k_neighbors: list[int],
+    n_jobs: int,
+    *,
+    nn_algorithm: str,
+) -> dict[str, Any]:
+    """Compute structure preservation metrics (kNN preservation, distance correlation)."""
+    knn_results = _knn_preservation(
+        X_before, X_after, k_neighbors, n_jobs, nn_algorithm=nn_algorithm
+    )
+    dist_corr = _pairwise_distance_correlation(X_before, X_after)
+    return {
+        "knn": knn_results,
+        "distance_correlation": dist_corr,
+    }
+
+
+def _compute_alignment_metrics(
+    X_before_orig: npt.NDArray[Any],
+    X_after_orig: npt.NDArray[Any],
+    X_before_pca: npt.NDArray[Any],
+    X_after_pca: npt.NDArray[Any],
+    batch_labels: npt.NDArray[Any],
+) -> dict[str, Any]:
+    """Compute batch alignment metrics (centroid distance, Levene statistic)."""
+    centroid_before = _mean_centroid_distance(X_before_pca, batch_labels)
+    centroid_after = _mean_centroid_distance(X_after_pca, batch_labels)
+
+    # Levene test operates on the original feature space, not PCA-reduced
+    levene_before = _levene_median_statistic(X_before_orig, batch_labels)
+    levene_after = _levene_median_statistic(X_after_orig, batch_labels)
+
+    return {
+        "centroid_distance": {"before": centroid_before, "after": centroid_after},
+        "levene_statistic": {"before": levene_before, "after": levene_after},
+    }
 
 
 class ComBatMetricsMixin:
@@ -627,9 +705,9 @@ class ComBatMetricsMixin:
         idx = X.index
 
         if batch is None:
-            batch_vec = self._subset(self.batch, idx)
+            batch_vec = self._subset(self.batch, idx)  # type: ignore[attr-defined]
         else:
-            if isinstance(batch, (pd.Series, pd.DataFrame)):
+            if isinstance(batch, pd.Series | pd.DataFrame):
                 batch_vec = batch.loc[idx] if hasattr(batch, "loc") else batch
             elif isinstance(batch, np.ndarray):
                 batch_vec = pd.Series(batch, index=idx)
@@ -639,7 +717,7 @@ class ComBatMetricsMixin:
         batch_labels = np.array(batch_vec)
 
         X_before = X.values
-        X_after = self.transform(X).values
+        X_after = self.transform(X).values  # type: ignore[attr-defined]
 
         n_samples, n_features = X_before.shape
         if kbet_k0 is None:
@@ -660,79 +738,34 @@ class ComBatMetricsMixin:
             X_before_pca = X_before
             X_after_pca = X_after
 
-        silhouette_before = _silhouette_batch(X_before_pca, batch_labels)
-        silhouette_after = _silhouette_batch(X_after_pca, batch_labels)
-
-        db_before = _davies_bouldin_batch(X_before_pca, batch_labels)
-        db_after = _davies_bouldin_batch(X_after_pca, batch_labels)
-
-        kbet_before, _ = _kbet_score(X_before_pca, batch_labels, kbet_k0, nn_algorithm=nn_algorithm)
-        kbet_after, _ = _kbet_score(X_after_pca, batch_labels, kbet_k0, nn_algorithm=nn_algorithm)
-
-        lisi_before = _lisi_score(
-            X_before_pca, batch_labels, lisi_perplexity, nn_algorithm=nn_algorithm
+        batch_effect = _compute_batch_effect_metrics(
+            X_before_pca,
+            X_after_pca,
+            batch_labels,
+            kbet_k0=kbet_k0,
+            lisi_perplexity=lisi_perplexity,
+            nn_algorithm=nn_algorithm,
         )
-        lisi_after = _lisi_score(
-            X_after_pca, batch_labels, lisi_perplexity, nn_algorithm=nn_algorithm
+        preservation = _compute_preservation_metrics(
+            X_before_pca,
+            X_after_pca,
+            k_neighbors,
+            n_jobs,
+            nn_algorithm=nn_algorithm,
+        )
+        alignment = _compute_alignment_metrics(
+            X_before,
+            X_after,
+            X_before_pca,
+            X_after_pca,
+            batch_labels,
         )
 
-        var_ratio_before = _variance_ratio(X_before_pca, batch_labels)
-        var_ratio_after = _variance_ratio(X_after_pca, batch_labels)
-
-        knn_results = _knn_preservation(
-            X_before_pca, X_after_pca, k_neighbors, n_jobs, nn_algorithm=nn_algorithm
-        )
-        dist_corr = _pairwise_distance_correlation(X_before_pca, X_after_pca)
-
-        centroid_before = _mean_centroid_distance(X_before_pca, batch_labels)
-        centroid_after = _mean_centroid_distance(X_after_pca, batch_labels)
-
-        levene_before = _levene_median_statistic(X_before, batch_labels)
-        levene_after = _levene_median_statistic(X_after, batch_labels)
-
-        n_batches = len(np.unique(batch_labels))
-
-        metrics = {
-            "batch_effect": {
-                "silhouette": {
-                    "before": silhouette_before,
-                    "after": silhouette_after,
-                },
-                "davies_bouldin": {
-                    "before": db_before,
-                    "after": db_after,
-                },
-                "kbet": {
-                    "before": kbet_before,
-                    "after": kbet_after,
-                },
-                "lisi": {
-                    "before": lisi_before,
-                    "after": lisi_after,
-                    "max_value": n_batches,
-                },
-                "variance_ratio": {
-                    "before": var_ratio_before,
-                    "after": var_ratio_after,
-                },
-            },
-            "preservation": {
-                "knn": knn_results,
-                "distance_correlation": dist_corr,
-            },
-            "alignment": {
-                "centroid_distance": {
-                    "before": centroid_before,
-                    "after": centroid_after,
-                },
-                "levene_statistic": {
-                    "before": levene_before,
-                    "after": levene_after,
-                },
-            },
+        return {
+            "batch_effect": batch_effect,
+            "preservation": preservation,
+            "alignment": alignment,
         }
-
-        return metrics
 
     def feature_batch_importance(
         self,
@@ -786,7 +819,7 @@ class ComBatMetricsMixin:
         location = np.sqrt((gamma_star**2).mean(axis=0))
 
         # Scale effect: RMS of log(delta) across batches
-        if not self.mean_only:
+        if not self.mean_only:  # type: ignore[attr-defined]
             scale = np.sqrt((np.log(delta_star) ** 2).mean(axis=0))
         else:
             scale = np.zeros_like(location)

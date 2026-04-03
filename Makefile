@@ -1,20 +1,11 @@
 .DEFAULT_GOAL := help
-.PHONY: help install install-docs lint lint-check format format-check pre-commit \
-        test test-cov docs docs-clean docs-serve clean build check \
-        publish publish-test
+.PHONY: help install install-docs lint format format-check pre-commit \
+        test test-cov typecheck docs docs-clean docs-serve clean publish publish-test
 
 # Colours
 BOLD  := \033[1m
 RESET := \033[0m
 CYAN  := \033[36m
-
-# Overridable tool paths
-RUFF       ?= ruff
-PYTEST     ?= pytest
-PIP        ?= pip
-PRECOMMIT  ?= pre-commit
-TWINE      ?= twine
-BUILD      ?= python -m build
 
 # Paths
 SRC   := combatlearn
@@ -28,39 +19,35 @@ help:  ## Show this help message
 # Installation
 
 install:  ## Install package with development dependencies
-	@$(PIP) install -e ".[dev]"
+	@pip install -e ".[dev]"
 
 install-docs:  ## Install package with documentation dependencies
-	@$(PIP) install -e ".[docs]"
+	@pip install -e ".[docs]"
 
 # Code quality
 
-lint:  ## Run ruff linter (auto-fix)
-	@$(RUFF) check --fix $(SRC)/ $(TESTS)/
-
-lint-check:  ## Run ruff linter in check-only mode (no fixes)
-	@$(RUFF) check $(SRC)/ $(TESTS)/
+lint:  ## Run ruff linter
+	@ruff check --fix $(SRC)/ $(TESTS)/
 
 format:  ## Run ruff formatter (applies changes)
-	@$(RUFF) format $(SRC)/ $(TESTS)/
+	@ruff format $(SRC)/ $(TESTS)/
 
 format-check:  ## Run ruff formatter in check-only mode (no changes)
-	@$(RUFF) format --check $(SRC)/ $(TESTS)/
+	@ruff format --check $(SRC)/ $(TESTS)/
 
 pre-commit:  ## Run the full pre-commit suite on all files
-	@$(PRECOMMIT) run --all-files
+	@pre-commit run --all-files
+
+typecheck:  ## Run mypy type checking
+	@mypy $(SRC)/
 
 # Tests
 
 test:  ## Run tests
-	@$(PYTEST) -v $(TESTS)/
+	@pytest $(TESTS)/
 
 test-cov:  ## Run tests with coverage report
-	@$(PYTEST) $(TESTS)/ --cov=$(SRC) --cov-report=term-missing
-
-# Composite targets
-
-check: lint-check format-check test  ## Run lint + format-check + tests (CI gate)
+	@pytest $(TESTS)/ --cov=$(SRC) --cov-report=term-missing
 
 # Documentation
 
@@ -81,13 +68,13 @@ clean:  ## Remove build artefacts and caches
 	@find . -type d -name "*.egg-info"   -exec rm -rf {} + 2>/dev/null || true
 	@rm -rf dist/ build/
 
-# Build & Release
+# Release
 
-build: clean  ## Build distribution packages
-	@$(BUILD)
+publish: clean  ## Build and publish package to PyPI
+	@read -p "Publish to PyPI? [y/N] " ans && [ "$$ans" = "y" ]
+	@python -m build
+	@twine upload dist/*
 
-publish: build  ## Build and publish package to PyPI
-	@$(TWINE) upload dist/*
-
-publish-test: build  ## Build and publish package to TestPyPI
-	@$(TWINE) upload --repository testpypi dist/*
+publish-test: clean  ## Build and publish package to TestPyPI
+	@python -m build
+	@twine upload --repository testpypi dist/*

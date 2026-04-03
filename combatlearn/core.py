@@ -9,7 +9,7 @@
 from __future__ import annotations
 
 import warnings
-from typing import Any, Literal
+from typing import Any, Literal, TypeAlias
 
 import numpy as np
 import numpy.linalg as la
@@ -17,8 +17,8 @@ import numpy.typing as npt
 import pandas as pd
 from sklearn.decomposition import PCA
 
-ArrayLike = pd.DataFrame | pd.Series | npt.NDArray[Any]
-FloatArray = npt.NDArray[np.float64]
+ArrayLike: TypeAlias = pd.DataFrame | pd.Series | npt.NDArray[Any]
+FloatArray: TypeAlias = npt.NDArray[np.float64]
 
 
 class ComBatModel:
@@ -69,6 +69,7 @@ class ComBatModel:
         self._n_per_batch: dict[str, int]
         self._reference_batch_idx: int | None
         self._beta_hat_nonbatch: FloatArray
+        self._nonbatch_columns: list[str]
         self._n_batch: int
         self._p_design: int
         self._covbat_pca: PCA
@@ -80,19 +81,35 @@ class ComBatModel:
         # Validate covbat_cov_thresh
         if isinstance(self.covbat_cov_thresh, float):
             if not (0.0 < self.covbat_cov_thresh <= 1.0):
-                raise ValueError("covbat_cov_thresh must be in (0, 1] when float.")
+                raise ValueError(
+                    f"covbat_cov_thresh={self.covbat_cov_thresh!r} is out of range. "
+                    f"Expected a float in (0, 1] (e.g. 0.9 to retain 90% of variance)."
+                )
         elif isinstance(self.covbat_cov_thresh, int):
             if self.covbat_cov_thresh < 1:
-                raise ValueError("covbat_cov_thresh must be >= 1 when int.")
+                raise ValueError(
+                    f"covbat_cov_thresh={self.covbat_cov_thresh!r} is invalid. "
+                    f"Expected an int >= 1 (the number of principal components to retain)."
+                )
         else:
-            raise TypeError("covbat_cov_thresh must be float or int.")
+            raise TypeError(
+                f"covbat_cov_thresh must be float or int, "
+                f"got {type(self.covbat_cov_thresh).__name__} ({self.covbat_cov_thresh!r}). "
+                f"Use a float in (0, 1] for cumulative variance or an int >= 1 for "
+                f"a fixed number of PCs."
+            )
 
     @staticmethod
     def _as_series(arr: ArrayLike, index: pd.Index, name: str) -> pd.Series:
         """Convert array-like to categorical Series with validation."""
         ser = arr.copy() if isinstance(arr, pd.Series) else pd.Series(arr, index=index, name=name)
         if not ser.index.equals(index):
-            raise ValueError(f"`{name}` index mismatch with `X`.")
+            diff = index.symmetric_difference(ser.index)
+            raise ValueError(
+                f"`{name}` index does not align with `X`. "
+                f"{len(diff)} mismatched entries (first 3): {list(diff[:3])}. "
+                f"Ensure both share the same index."
+            )
         return ser.astype("category")
 
     @staticmethod
@@ -105,7 +122,12 @@ class ComBatModel:
         if not isinstance(arr, pd.DataFrame):
             arr = pd.DataFrame(arr, index=index)
         if not arr.index.equals(index):
-            raise ValueError(f"`{name}` index mismatch with `X`.")
+            diff = index.symmetric_difference(arr.index)
+            raise ValueError(
+                f"`{name}` index does not align with `X`. "
+                f"{len(diff)} mismatched entries (first 3): {list(diff[:3])}. "
+                f"Ensure both share the same index."
+            )
         return arr
 
     def fit(
@@ -139,7 +161,10 @@ class ComBatModel:
         """
         method = self.method.lower()
         if method not in {"johnson", "fortin", "chen"}:
-            raise ValueError("method must be 'johnson', 'fortin', or 'chen'.")
+            raise ValueError(
+                f"method={self.method!r} is not recognized. "
+                f"Expected one of 'johnson', 'fortin', or 'chen'."
+            )
         if not isinstance(X, pd.DataFrame):
             X = pd.DataFrame(X)
         idx = X.index
@@ -150,8 +175,9 @@ class ComBatModel:
 
         if self.reference_batch is not None and self.reference_batch not in batch.cat.categories:
             raise ValueError(
-                f"reference_batch={self.reference_batch!r} not present in the data batches."
-                f"{list(batch.cat.categories)}"
+                f"reference_batch={self.reference_batch!r} not found. "
+                f"Available batches: {list(batch.cat.categories)}. "
+                f"Check for typos or trailing whitespace in batch labels."
             )
 
         if method == "johnson":
@@ -167,8 +193,15 @@ class ComBatModel:
     def _fit_johnson(self, X: pd.DataFrame, batch: pd.Series) -> None:
         """Johnson et al. (2007) ComBat."""
         self._batch_levels = batch.cat.categories
-        pooled_var = X.var(axis=0, ddof=1) + self.eps
         grand_mean = X.mean(axis=0)
+
+        # Within-batch residual variance
+        n_samples = len(X)
+        resid = X.copy()
+        for lvl in self._batch_levels:
+            idx = batch == lvl
+            resid.loc[idx] = X.loc[idx] - X.loc[idx].mean(axis=0)
+        pooled_var = (resid**2).sum(axis=0) / n_samples + self.eps
 
         Xs = (X - grand_mean) / np.sqrt(pooled_var)
 
@@ -180,7 +213,10 @@ class ComBatModel:
             idx = batch == lvl
             n_b = int(idx.sum())
             if n_b < 2:
-                raise ValueError(f"Batch '{lvl}' has <2 samples.")
+                raise ValueError(
+                    f"Batch '{lvl}' has only {n_b} sample(s). ComBat requires >= 2 samples "
+                    f"per batch. Consider merging small batches or removing them."
+                )
             n_per_batch[str(lvl)] = n_b
             xb = Xs.loc[idx]
             gamma_hat.append(xb.mean(axis=0).values)
@@ -189,14 +225,23 @@ class ComBatModel:
         gamma_hat_arr = np.vstack(gamma_hat)
         delta_hat_arr = np.vstack(delta_hat)
 
+        b_names = [str(lvl) for lvl in self._batch_levels]
         if self.mean_only:
             gamma_star = self._shrink_gamma(
-                gamma_hat_arr, delta_hat_arr, n_per_batch, parametric=self.parametric
+                gamma_hat_arr,
+                delta_hat_arr,
+                n_per_batch,
+                parametric=self.parametric,
+                batch_names=b_names,
             )
             delta_star = np.ones_like(delta_hat_arr)
         else:
             gamma_star, delta_star = self._shrink_gamma_delta(
-                gamma_hat_arr, delta_hat_arr, n_per_batch, parametric=self.parametric
+                gamma_hat_arr,
+                delta_hat_arr,
+                n_per_batch,
+                parametric=self.parametric,
+                batch_names=b_names,
             )
 
         if self.reference_batch is not None:
@@ -215,6 +260,7 @@ class ComBatModel:
         self._gamma_star = gamma_star
         self._delta_star = delta_star
         self._n_per_batch = n_per_batch
+        self._design_cond: float | None = None
 
     def _fit_fortin(
         self,
@@ -232,8 +278,8 @@ class ComBatModel:
         if self.reference_batch is not None:
             if self.reference_batch not in self._batch_levels:
                 raise ValueError(
-                    f"reference_batch={self.reference_batch!r} not present in batches."
-                    f"{list(self._batch_levels)}"
+                    f"reference_batch={self.reference_batch!r} not found. "
+                    f"Available batches: {list(self._batch_levels)}. "
                 )
             batch_dummies.loc[:, self.reference_batch] = 1.0
 
@@ -244,7 +290,10 @@ class ComBatModel:
         if cont is not None:
             parts.append(cont.astype(float))
 
-        design = pd.concat(parts, axis=1).values
+        design_df = pd.concat(parts, axis=1)
+        self._nonbatch_columns = design_df.columns[n_batch:].tolist()
+        design = design_df.values
+        self._design_cond = float(la.cond(design))
         p_design = design.shape[1]
 
         X_np = X.values
@@ -253,8 +302,10 @@ class ComBatModel:
         beta_hat_batch = beta_hat[:n_batch]
         self._beta_hat_nonbatch = beta_hat[n_batch:]
 
-        n_per_batch = batch.value_counts().sort_index().astype(int).values
-        self._n_per_batch = dict(zip(self._batch_levels, n_per_batch, strict=True))
+        n_per_batch: FloatArray = np.asarray(
+            batch.value_counts().sort_index().astype(int).values, dtype=np.float64
+        )
+        self._n_per_batch = dict(zip(self._batch_levels, n_per_batch.astype(int), strict=True))
 
         if self.reference_batch is not None:
             ref_idx = list(self._batch_levels).index(self.reference_batch)
@@ -266,7 +317,7 @@ class ComBatModel:
         self._grand_mean = pd.Series(grand_mean, index=X.columns)
 
         if self.reference_batch is not None:
-            ref_mask = (batch == self.reference_batch).values
+            ref_mask = np.asarray(batch == self.reference_batch)
             resid = X_np[ref_mask] - design[ref_mask] @ beta_hat
             denom = int(ref_mask.sum())
         else:
@@ -283,14 +334,23 @@ class ComBatModel:
             [Xs[batch == lvl].var(axis=0, ddof=1) + self.eps for lvl in self._batch_levels]
         )
 
+        b_names = [str(lvl) for lvl in self._batch_levels]
         if self.mean_only:
             gamma_star = self._shrink_gamma(
-                gamma_hat, delta_hat, n_per_batch, parametric=self.parametric
+                gamma_hat,
+                delta_hat,
+                n_per_batch,
+                parametric=self.parametric,
+                batch_names=b_names,
             )
             delta_star = np.ones_like(delta_hat)
         else:
             gamma_star, delta_star = self._shrink_gamma_delta(
-                gamma_hat, delta_hat, n_per_batch, parametric=self.parametric
+                gamma_hat,
+                delta_hat,
+                n_per_batch,
+                parametric=self.parametric,
+                batch_names=b_names,
             )
 
         if ref_idx is not None:
@@ -341,14 +401,23 @@ class ComBatModel:
         gamma_hat_arr = np.vstack(gamma_hat)
         delta_hat_arr = np.vstack(delta_hat)
 
+        b_names = [str(lvl) for lvl in self._batch_levels_pc]
         if self.mean_only:
             gamma_star = self._shrink_gamma(
-                gamma_hat_arr, delta_hat_arr, n_per_batch, parametric=self.parametric
+                gamma_hat_arr,
+                delta_hat_arr,
+                n_per_batch,
+                parametric=self.parametric,
+                batch_names=b_names,
             )
             delta_star = np.ones_like(delta_hat_arr)
         else:
             gamma_star, delta_star = self._shrink_gamma_delta(
-                gamma_hat_arr, delta_hat_arr, n_per_batch, parametric=self.parametric
+                gamma_hat_arr,
+                delta_hat_arr,
+                n_per_batch,
+                parametric=self.parametric,
+                batch_names=b_names,
             )
 
         if self.reference_batch is not None:
@@ -371,64 +440,105 @@ class ComBatModel:
         parametric: bool,
         max_iter: int = 100,
         tol: float = 1e-4,
+        batch_names: list[str] | None = None,
     ) -> tuple[FloatArray, FloatArray]:
-        """Empirical Bayes shrinkage estimation."""
+        """Empirical Bayes shrinkage estimation.
+
+        Both the parametric and non-parametric branches use an iterative
+        scheme that alternates between updating gamma (location) and delta
+        (scale) posteriors until convergence.
+        """
+        B, _p = gamma_hat.shape
+        n_vec = (
+            np.array(list(n_per_batch.values())) if isinstance(n_per_batch, dict) else n_per_batch
+        )
+        gamma_bar = gamma_hat.mean(axis=0)
+        t2 = np.maximum(gamma_hat.var(axis=0, ddof=1), self.eps)
+        convergence_info: list[dict[str, object]] = []
+
+        def postmean(
+            g_hat: FloatArray,
+            g_bar: FloatArray,
+            n: float,
+            d_star: FloatArray,
+            t2_: FloatArray,
+        ) -> FloatArray:
+            return (t2_ * n * g_hat + d_star * g_bar) / (t2_ * n + d_star)
+
+        def postvar(
+            sum2: FloatArray, n: float, a: FloatArray | float, b: FloatArray | float
+        ) -> FloatArray:
+            return (0.5 * sum2 + b) / (n / 2.0 + a - 1.0)
+
         if parametric:
-            gamma_bar = gamma_hat.mean(axis=0)
-            t2 = gamma_hat.var(axis=0, ddof=1)
-            a_prior = (delta_hat.mean(axis=0) ** 2) / delta_hat.var(axis=0, ddof=1) + 2
+            delta_var = np.maximum(delta_hat.var(axis=0, ddof=1), self.eps)
+            a_prior = (delta_hat.mean(axis=0) ** 2) / delta_var + 2
             b_prior = delta_hat.mean(axis=0) * (a_prior - 1)
 
-            B, _p = gamma_hat.shape
             gamma_star = np.empty_like(gamma_hat)
             delta_star = np.empty_like(delta_hat)
-            n_vec = (
-                np.array(list(n_per_batch.values()))
-                if isinstance(n_per_batch, dict)
-                else n_per_batch
-            )
 
             for i in range(B):
                 n_i = n_vec[i]
-                g, d = gamma_hat[i], delta_hat[i]
-                gamma_post_var = 1.0 / (n_i / d + 1.0 / t2)
-                gamma_star[i] = gamma_post_var * (n_i * g / d + gamma_bar / t2)
+                g_hat_i = gamma_hat[i]
+                d_hat_i = np.maximum(delta_hat[i], self.eps)
 
-                a_post = a_prior + n_i / 2.0
-                b_post = b_prior + 0.5 * n_i * d
-                delta_star[i] = b_post / (a_post - 1)
+                g_new = postmean(g_hat_i, gamma_bar, n_i, d_hat_i, t2)
+                sum2 = (n_i - 1) * d_hat_i + n_i * (g_hat_i - g_new) ** 2
+                d_new = postvar(sum2, n_i, a_prior, b_prior)
+
+                converged = False
+                n_iter = 0
+                gamma_change = float("inf")
+                delta_change = float("inf")
+                for n_iter in range(1, max_iter + 1):  # noqa: B007  # used after loop
+                    g_prev, d_prev = g_new, d_new
+                    g_new = postmean(g_hat_i, gamma_bar, n_i, d_prev, t2)
+                    sum2 = (n_i - 1) * d_hat_i + n_i * (g_hat_i - g_new) ** 2
+                    d_new = postvar(sum2, n_i, a_prior, b_prior)
+                    gamma_change = float(
+                        np.max(np.abs(g_new - g_prev) / (np.abs(g_prev) + self.eps))
+                    )
+                    delta_change = float(
+                        np.max(np.abs(d_new - d_prev) / (np.abs(d_prev) + self.eps))
+                    )
+                    if gamma_change < tol and (self.mean_only or delta_change < tol):
+                        converged = True
+                        break
+
+                b_name = batch_names[i] if batch_names else str(i)
+                if not converged:
+                    warnings.warn(
+                        f"Parametric EB did not converge for batch '{b_name}' "
+                        f"within {max_iter} iterations "
+                        f"(final relative change: {max(gamma_change, delta_change):.2e}, "
+                        f"tol: {tol:.1e}). Results may be unreliable for this batch.",
+                        stacklevel=2,
+                    )
+                convergence_info.append(
+                    {
+                        "batch": b_name,
+                        "converged": converged,
+                        "iterations": n_iter,
+                        "final_gamma_change": gamma_change,
+                        "final_delta_change": delta_change,
+                    }
+                )
+                gamma_star[i] = g_new
+                delta_star[i] = 1.0 if self.mean_only else d_new
+            self._convergence_info = convergence_info
             return gamma_star, delta_star
 
         else:
-            B, _p = gamma_hat.shape
-            n_vec = (
-                np.array(list(n_per_batch.values()))
-                if isinstance(n_per_batch, dict)
-                else n_per_batch
-            )
-            gamma_bar = gamma_hat.mean(axis=0)
-            t2 = gamma_hat.var(axis=0, ddof=1)
 
-            def postmean(
-                g_hat: FloatArray,
-                g_bar: FloatArray,
-                n: float,
-                d_star: FloatArray,
-                t2_: FloatArray,
-            ) -> FloatArray:
-                return (t2_ * n * g_hat + d_star * g_bar) / (t2_ * n + d_star)
-
-            def postvar(sum2: FloatArray, n: float, a: FloatArray, b: FloatArray) -> FloatArray:
-                return (0.5 * sum2 + b) / (n / 2.0 + a - 1.0)
-
-            def aprior(delta: FloatArray) -> FloatArray:
-                m, s2 = delta.mean(), delta.var()
-                s2 = max(s2, self.eps)
+            def aprior(delta: FloatArray) -> float:
+                m = float(delta.mean())
+                s2 = float(max(delta.var(ddof=1), self.eps))
                 return (2 * s2 + m**2) / s2
 
-            def bprior(delta: FloatArray) -> FloatArray:
-                m, s2 = delta.mean(), delta.var()
-                s2 = max(s2, self.eps)
+            def bprior(delta: FloatArray) -> float:
+                m = float(delta.mean())
+                s2 = float(max(delta.var(ddof=1), self.eps))
                 return (m * s2 + m**3) / s2
 
             gamma_star = np.empty_like(gamma_hat)
@@ -441,19 +551,47 @@ class ComBatModel:
                 a_i = aprior(d_hat_i)
                 b_i = bprior(d_hat_i)
 
+                converged = False
+                n_iter = 0
+                gamma_change = float("inf")
+                delta_change = float("inf")
                 g_new, d_new = g_hat_i.copy(), d_hat_i.copy()
-                for _ in range(max_iter):
+                for n_iter in range(1, max_iter + 1):  # noqa: B007  # used after loop
                     g_prev, d_prev = g_new, d_new
                     g_new = postmean(g_hat_i, gamma_bar, n_i, d_prev, t2)
                     sum2 = (n_i - 1) * d_hat_i + n_i * (g_hat_i - g_new) ** 2
                     d_new = postvar(sum2, n_i, a_i, b_i)
-                    if np.max(np.abs(g_new - g_prev) / (np.abs(g_prev) + self.eps)) < tol and (
-                        self.mean_only
-                        or np.max(np.abs(d_new - d_prev) / (np.abs(d_prev) + self.eps)) < tol
-                    ):
+                    gamma_change = float(
+                        np.max(np.abs(g_new - g_prev) / (np.abs(g_prev) + self.eps))
+                    )
+                    delta_change = float(
+                        np.max(np.abs(d_new - d_prev) / (np.abs(d_prev) + self.eps))
+                    )
+                    if gamma_change < tol and (self.mean_only or delta_change < tol):
+                        converged = True
                         break
+
+                b_name = batch_names[i] if batch_names else str(i)
+                if not converged:
+                    warnings.warn(
+                        f"Non-parametric EB did not converge for batch '{b_name}' "
+                        f"within {max_iter} iterations "
+                        f"(final relative change: {max(gamma_change, delta_change):.2e}, "
+                        f"tol: {tol:.1e}). Results may be unreliable for this batch.",
+                        stacklevel=2,
+                    )
+                convergence_info.append(
+                    {
+                        "batch": b_name,
+                        "converged": converged,
+                        "iterations": n_iter,
+                        "final_gamma_change": gamma_change,
+                        "final_delta_change": delta_change,
+                    }
+                )
                 gamma_star[i] = g_new
                 delta_star[i] = 1.0 if self.mean_only else d_new
+            self._convergence_info = convergence_info
             return gamma_star, delta_star
 
     def _shrink_gamma(
@@ -463,10 +601,15 @@ class ComBatModel:
         n_per_batch: dict[str, int] | FloatArray,
         *,
         parametric: bool,
+        batch_names: list[str] | None = None,
     ) -> FloatArray:
         """Convenience wrapper that returns only gamma* (for *mean-only* mode)."""
         gamma, _ = self._shrink_gamma_delta(
-            gamma_hat, delta_hat, n_per_batch, parametric=parametric
+            gamma_hat,
+            delta_hat,
+            n_per_batch,
+            parametric=parametric,
+            batch_names=batch_names,
         )
         return gamma
 
@@ -523,7 +666,9 @@ class ComBatModel:
         elif method == "chen":
             return self._transform_chen(X, batch, disc, cont)
         else:
-            raise ValueError(f"Unknown method: {method}.")
+            raise ValueError(
+                f"Unknown method={method!r}. Expected one of 'johnson', 'fortin', or 'chen'."
+            )
 
     def _transform_johnson(self, X: pd.DataFrame, batch: pd.Series) -> pd.DataFrame:
         """Johnson transform implementation."""
@@ -555,21 +700,32 @@ class ComBatModel:
         cont: pd.DataFrame | None,
     ) -> pd.DataFrame:
         """Fortin transform implementation."""
-        batch_dummies = pd.get_dummies(batch, drop_first=False).astype(float)[self._batch_levels]
+        batch_dummies = pd.get_dummies(batch, drop_first=False).astype(float)
+        batch_dummies = batch_dummies.reindex(columns=self._batch_levels, fill_value=0.0)
         if self.reference_batch is not None:
             batch_dummies.loc[:, self.reference_batch] = 1.0
 
-        parts = [batch_dummies]
+        nonbatch_parts: list[pd.DataFrame] = []
         if disc is not None:
-            parts.append(pd.get_dummies(disc.astype("category"), drop_first=True).astype(float))
+            nonbatch_parts.append(
+                pd.get_dummies(disc.astype("category"), drop_first=True).astype(float)
+            )
         if cont is not None:
-            parts.append(cont.astype(float))
+            nonbatch_parts.append(cont.astype(float))
 
-        design = pd.concat(parts, axis=1).values
+        if nonbatch_parts:
+            nonbatch_df = pd.concat(nonbatch_parts, axis=1)
+        else:
+            nonbatch_df = pd.DataFrame(index=batch_dummies.index)
+        nonbatch_df = nonbatch_df.reindex(columns=self._nonbatch_columns, fill_value=0.0)
+
+        design = pd.concat([batch_dummies, nonbatch_df], axis=1).values
 
         X_np = X.values
-        stand_mu = self._grand_mean.values + design[:, self._n_batch :] @ self._beta_hat_nonbatch
-        Xs = (X_np - stand_mu) / np.sqrt(self._pooled_var.values)
+        grand_vals = np.asarray(self._grand_mean.values, dtype=np.float64)
+        pooled_vals = np.asarray(self._pooled_var.values, dtype=np.float64)
+        stand_mu = grand_vals + design[:, self._n_batch :] @ self._beta_hat_nonbatch
+        Xs = (X_np - stand_mu) / np.sqrt(pooled_vals)
 
         for i, lvl in enumerate(self._batch_levels):
             idx = batch == lvl
@@ -586,7 +742,7 @@ class ComBatModel:
             else:
                 Xs[idx] = (Xs[idx] - g) / np.sqrt(d)
 
-        X_adj = Xs * np.sqrt(self._pooled_var.values) + stand_mu
+        X_adj = Xs * np.sqrt(pooled_vals) + stand_mu
         return pd.DataFrame(X_adj, index=X.index, columns=X.columns, dtype=float)
 
     def _transform_chen(

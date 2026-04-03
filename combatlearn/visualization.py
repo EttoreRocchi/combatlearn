@@ -8,6 +8,7 @@ import matplotlib
 import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
 import numpy as np
+import numpy.typing as npt
 import pandas as pd
 import plotly.graph_objects as go
 import seaborn as sns
@@ -36,7 +37,7 @@ class ComBatVisualizationMixin:
         title: str | None = None,
         show_legend: bool = True,
         return_embeddings: bool = False,
-        **reduction_kwargs,
+        **reduction_kwargs: Any,
     ) -> Any | tuple[Any, dict[str, FloatArray]]:
         """
         Visualize the ComBat transformation effect using dimensionality reduction.
@@ -113,11 +114,11 @@ class ComBatVisualizationMixin:
             X = pd.DataFrame(X)
 
         idx = X.index
-        batch_vec = self._subset(self.batch, idx)
+        batch_vec = self._subset(self.batch, idx)  # type: ignore[attr-defined]
         if batch_vec is None:
             raise ValueError("Batch information is required for visualization")
 
-        X_transformed = self.transform(X)
+        X_transformed = self.transform(X)  # type: ignore[attr-defined]
 
         X_np = X.values
         X_trans_np = X_transformed.values
@@ -171,6 +172,31 @@ class ComBatVisualizationMixin:
         else:
             return fig
 
+    @staticmethod
+    def _scatter_panel(
+        ax: Any,
+        X: FloatArray,
+        batch_labels: pd.Series,
+        unique_batches: pd.Series,
+        colors: npt.NDArray[Any],
+        n_components: int,
+        point_size: int,
+        alpha: float,
+    ) -> None:
+        """Scatter one panel (before or after) onto the given axes."""
+        for i, batch in enumerate(unique_batches):
+            mask = batch_labels == batch
+            coords = [X[mask, j] for j in range(n_components)]
+            ax.scatter(
+                *coords,
+                c=[colors[i]],
+                s=point_size,
+                alpha=alpha,
+                label=f"Batch {batch}",
+                edgecolors="black",
+                linewidth=0.5,
+            )
+
     def _create_static_plot(
         self,
         X_orig: FloatArray,
@@ -204,79 +230,84 @@ class ComBatVisualizationMixin:
             ax1 = fig.add_subplot(121, projection="3d")
             ax2 = fig.add_subplot(122, projection="3d")
 
-        for i, batch in enumerate(unique_batches):
-            mask = batch_labels == batch
-            if n_components == 2:
-                ax1.scatter(
-                    X_orig[mask, 0],
-                    X_orig[mask, 1],
-                    c=[colors[i]],
-                    s=point_size,
-                    alpha=alpha,
-                    label=f"Batch {batch}",
-                    edgecolors="black",
-                    linewidth=0.5,
-                )
-            else:
-                ax1.scatter(
-                    X_orig[mask, 0],
-                    X_orig[mask, 1],
-                    X_orig[mask, 2],
-                    c=[colors[i]],
-                    s=point_size,
-                    alpha=alpha,
-                    label=f"Batch {batch}",
-                    edgecolors="black",
-                    linewidth=0.5,
-                )
+        scatter_kwargs = {
+            "batch_labels": batch_labels,
+            "unique_batches": unique_batches,
+            "colors": colors,
+            "n_components": n_components,
+            "point_size": point_size,
+            "alpha": alpha,
+        }
+        self._scatter_panel(ax1, X_orig, **scatter_kwargs)
+        self._scatter_panel(ax2, X_trans, **scatter_kwargs)
 
-        ax1.set_title(f"Before ComBat correction\n({method.upper()})")
-        ax1.set_xlabel(f"{method.upper()}1")
-        ax1.set_ylabel(f"{method.upper()}2")
-        if n_components == 3:
-            ax1.set_zlabel(f"{method.upper()}3")
-
-        for i, batch in enumerate(unique_batches):
-            mask = batch_labels == batch
-            if n_components == 2:
-                ax2.scatter(
-                    X_trans[mask, 0],
-                    X_trans[mask, 1],
-                    c=[colors[i]],
-                    s=point_size,
-                    alpha=alpha,
-                    label=f"Batch {batch}",
-                    edgecolors="black",
-                    linewidth=0.5,
-                )
-            else:
-                ax2.scatter(
-                    X_trans[mask, 0],
-                    X_trans[mask, 1],
-                    X_trans[mask, 2],
-                    c=[colors[i]],
-                    s=point_size,
-                    alpha=alpha,
-                    label=f"Batch {batch}",
-                    edgecolors="black",
-                    linewidth=0.5,
-                )
-
-        ax2.set_title(f"After ComBat correction\n({method.upper()})")
-        ax2.set_xlabel(f"{method.upper()}1")
-        ax2.set_ylabel(f"{method.upper()}2")
-        if n_components == 3:
-            ax2.set_zlabel(f"{method.upper()}3")
+        method_upper = method.upper()
+        for ax, label in [(ax1, "Before"), (ax2, "After")]:
+            ax.set_title(f"{label} ComBat correction\n({method_upper})")
+            ax.set_xlabel(f"{method_upper}1")
+            ax.set_ylabel(f"{method_upper}2")
+            if n_components == 3:
+                ax.set_zlabel(f"{method_upper}3")  # type: ignore[attr-defined]
 
         if show_legend and n_batches <= 20:
             ax2.legend(bbox_to_anchor=(1.05, 1), loc="upper left")
 
         if title is None:
-            title = f"ComBat correction effect visualized with {method.upper()}"
+            title = f"ComBat correction effect visualized with {method_upper}"
         fig.suptitle(title, fontsize=14, fontweight="bold")
 
         plt.tight_layout()
         return fig
+
+    @staticmethod
+    def _add_plotly_traces(
+        fig: Any,
+        X: FloatArray,
+        batch_labels: pd.Series,
+        unique_batches: pd.Series,
+        batch_to_color: dict[Any, Any],
+        n_components: int,
+        col: int,
+        showlegend: bool,
+    ) -> None:
+        """Add plotly scatter traces for one panel (before or after)."""
+        for batch in unique_batches:
+            mask = batch_labels == batch
+            if n_components == 2:
+                fig.add_trace(
+                    go.Scatter(
+                        x=X[mask, 0],
+                        y=X[mask, 1],
+                        mode="markers",
+                        name=f"Batch {batch}",
+                        marker={
+                            "size": 8,
+                            "color": batch_to_color[batch],
+                            "line": {"width": 1, "color": "black"},
+                        },
+                        showlegend=showlegend,
+                    ),
+                    row=1,
+                    col=col,
+                )
+            else:
+                fig.add_trace(
+                    go.Scatter3d(
+                        x=X[mask, 0],
+                        y=X[mask, 1],
+                        z=X[mask, 2],
+                        mode="markers",
+                        name=f"Batch {batch}",
+                        marker={
+                            "size": 5,
+                            "color": batch_to_color[batch],
+                            "line": {"width": 0.5, "color": "black"},
+                        },
+                        showlegend=showlegend,
+                    ),
+                    row=1,
+                    col=col,
+                )
 
     def _create_interactive_plot(
         self,
@@ -290,13 +321,14 @@ class ComBatVisualizationMixin:
         show_legend: bool,
     ) -> Any:
         """Create interactive plots using plotly."""
+        method_upper = method.upper()
         if n_components == 2:
             fig = make_subplots(
                 rows=1,
                 cols=2,
                 subplot_titles=(
-                    f"Before ComBat correction ({method.upper()})",
-                    f"After ComBat correction ({method.upper()})",
+                    f"Before ComBat correction ({method_upper})",
+                    f"After ComBat correction ({method_upper})",
                 ),
             )
         else:
@@ -305,8 +337,8 @@ class ComBatVisualizationMixin:
                 cols=2,
                 specs=[[{"type": "scatter3d"}, {"type": "scatter3d"}]],
                 subplot_titles=(
-                    f"Before ComBat correction ({method.upper()})",
-                    f"After ComBat correction ({method.upper()})",
+                    f"Before ComBat correction ({method_upper})",
+                    f"After ComBat correction ({method_upper})",
                 ),
             )
 
@@ -317,85 +349,19 @@ class ComBatVisualizationMixin:
         color_list = [
             mcolors.to_hex(cmap_func(i / max(n_batches - 1, 1))) for i in range(n_batches)
         ]
-
         batch_to_color = dict(zip(unique_batches, color_list, strict=True))
 
-        for batch in unique_batches:
-            mask = batch_labels == batch
-
-            if n_components == 2:
-                fig.add_trace(
-                    go.Scatter(
-                        x=X_orig[mask, 0],
-                        y=X_orig[mask, 1],
-                        mode="markers",
-                        name=f"Batch {batch}",
-                        marker={
-                            "size": 8,
-                            "color": batch_to_color[batch],
-                            "line": {"width": 1, "color": "black"},
-                        },
-                        showlegend=False,
-                    ),
-                    row=1,
-                    col=1,
-                )
-
-                fig.add_trace(
-                    go.Scatter(
-                        x=X_trans[mask, 0],
-                        y=X_trans[mask, 1],
-                        mode="markers",
-                        name=f"Batch {batch}",
-                        marker={
-                            "size": 8,
-                            "color": batch_to_color[batch],
-                            "line": {"width": 1, "color": "black"},
-                        },
-                        showlegend=show_legend,
-                    ),
-                    row=1,
-                    col=2,
-                )
-            else:
-                fig.add_trace(
-                    go.Scatter3d(
-                        x=X_orig[mask, 0],
-                        y=X_orig[mask, 1],
-                        z=X_orig[mask, 2],
-                        mode="markers",
-                        name=f"Batch {batch}",
-                        marker={
-                            "size": 5,
-                            "color": batch_to_color[batch],
-                            "line": {"width": 0.5, "color": "black"},
-                        },
-                        showlegend=False,
-                    ),
-                    row=1,
-                    col=1,
-                )
-
-                fig.add_trace(
-                    go.Scatter3d(
-                        x=X_trans[mask, 0],
-                        y=X_trans[mask, 1],
-                        z=X_trans[mask, 2],
-                        mode="markers",
-                        name=f"Batch {batch}",
-                        marker={
-                            "size": 5,
-                            "color": batch_to_color[batch],
-                            "line": {"width": 0.5, "color": "black"},
-                        },
-                        showlegend=show_legend,
-                    ),
-                    row=1,
-                    col=2,
-                )
+        trace_kwargs = {
+            "batch_labels": batch_labels,
+            "unique_batches": unique_batches,
+            "batch_to_color": batch_to_color,
+            "n_components": n_components,
+        }
+        self._add_plotly_traces(fig, X_orig, **trace_kwargs, col=1, showlegend=False)  # type: ignore[arg-type]
+        self._add_plotly_traces(fig, X_trans, **trace_kwargs, col=2, showlegend=show_legend)  # type: ignore[arg-type]
 
         if title is None:
-            title = f"ComBat correction effect visualized with {method.upper()}"
+            title = f"ComBat correction effect visualized with {method_upper}"
 
         fig.update_layout(
             title=title,
@@ -405,7 +371,7 @@ class ComBatVisualizationMixin:
             hovermode="closest",
         )
 
-        axis_labels = [f"{method.upper()}{i + 1}" for i in range(n_components)]
+        axis_labels = [f"{method_upper}{i + 1}" for i in range(n_components)]
 
         if n_components == 2:
             fig.update_xaxes(title_text=axis_labels[0])
@@ -471,7 +437,7 @@ class ComBatVisualizationMixin:
         if mode not in ["magnitude", "distribution"]:
             raise ValueError(f"mode must be 'magnitude' or 'distribution', got '{mode}'")
 
-        importance_df = self.feature_batch_importance(mode=mode)
+        importance_df = self.feature_batch_importance(mode=mode)  # type: ignore[attr-defined]
         top_features = importance_df.head(top_n)
 
         # Reverse so highest values are at the top of the horizontal bar plot
@@ -593,7 +559,7 @@ class ComBatVisualizationMixin:
         gamma_star = self._model._gamma_star
         delta_star = self._model._delta_star
 
-        importance = self.feature_batch_importance()
+        importance = self.feature_batch_importance()  # type: ignore[attr-defined]
         top_features = importance.head(top_n).index
         feat_idx = [feature_names.get_loc(f) for f in top_features]
 
@@ -603,7 +569,7 @@ class ComBatVisualizationMixin:
             columns=top_features,
         )
 
-        n_plots = 1 if self.mean_only else 2
+        n_plots = 1 if self.mean_only else 2  # type: ignore[attr-defined]
         fig, axes = plt.subplots(1, n_plots, figsize=figsize)
         if n_plots == 1:
             axes = [axes]
@@ -620,7 +586,7 @@ class ComBatVisualizationMixin:
         axes[0].set_xlabel("Feature")
         axes[0].set_ylabel("Batch")
 
-        if not self.mean_only:
+        if not self.mean_only:  # type: ignore[attr-defined]
             log_delta_df = pd.DataFrame(
                 np.log(delta_star[:, feat_idx]),
                 index=[str(b) for b in batch_levels],

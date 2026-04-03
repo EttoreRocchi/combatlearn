@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
+import warnings
+from typing import Any
+
 import numpy as np
+import numpy.linalg as la
+import numpy.typing as npt
 import pandas as pd
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.utils.validation import check_array, check_is_fitted
@@ -12,7 +17,7 @@ from .metrics import ComBatMetricsMixin
 from .visualization import ComBatVisualizationMixin
 
 
-class ComBat(ComBatMetricsMixin, ComBatVisualizationMixin, BaseEstimator, TransformerMixin):
+class ComBat(ComBatMetricsMixin, ComBatVisualizationMixin, BaseEstimator, TransformerMixin):  # type: ignore[misc]
     """Pipeline-friendly wrapper around `ComBatModel`.
 
     Stores batch (and optional covariates) passed at construction and
@@ -41,6 +46,9 @@ class ComBat(ComBatMetricsMixin, ComBatVisualizationMixin, BaseEstimator, Transf
     compute_metrics : bool, default=False
         If True, ``fit_transform`` caches batch metrics in ``metrics_``.
     """
+
+    _NEAR_ZERO_VAR_THRESH: float = 1e-10
+    _IMBALANCE_RATIO_THRESH: float = 20.0
 
     def __init__(
         self,
@@ -75,31 +83,115 @@ class ComBat(ComBatMetricsMixin, ComBatVisualizationMixin, BaseEstimator, Transf
             batch_ser = (
                 pd.Series(self.batch) if not isinstance(self.batch, pd.Series) else self.batch
             )
-            if batch_ser.isna().any():
-                raise ValueError("batch contains NaN values.")
+            nan_count = int(batch_ser.isna().sum())
+            if nan_count:
+                raise ValueError(
+                    f"batch contains {nan_count} NaN value(s). "
+                    f"All batch labels must be non-null. Check your data for missing entries."
+                )
 
             if self.discrete_covariates is not None:
                 disc_df = (
                     pd.DataFrame(self.discrete_covariates)
-                    if not isinstance(self.discrete_covariates, (pd.Series, pd.DataFrame))
+                    if not isinstance(self.discrete_covariates, pd.Series | pd.DataFrame)
                     else self.discrete_covariates
                 )
-                if (
-                    disc_df.isna().any().any()
+                nan_count = int(
+                    disc_df.isna().sum().sum()
                     if isinstance(disc_df, pd.DataFrame)
-                    else disc_df.isna().any()
-                ):
-                    raise ValueError("discrete_covariates contains NaN values.")
+                    else disc_df.isna().sum()
+                )
+                if nan_count:
+                    raise ValueError(
+                        f"discrete_covariates contains {nan_count} NaN value(s). "
+                        f"All covariate values must be non-null."
+                    )
 
             if self.continuous_covariates is not None:
-                cont_arr = self.continuous_covariates
-                if isinstance(cont_arr, (pd.Series, pd.DataFrame)):
-                    cont_arr = cont_arr.values
+                cont_vals: ArrayLike = self.continuous_covariates
+                if isinstance(cont_vals, pd.Series | pd.DataFrame):
+                    cont_vals = cont_vals.values  # type: ignore[assignment]
                 check_array(
-                    np.atleast_2d(cont_arr) if np.asarray(cont_arr).ndim == 1 else cont_arr,
+                    np.atleast_2d(cont_vals) if np.asarray(cont_vals).ndim == 1 else cont_vals,
                     ensure_all_finite=True,
                     dtype="numeric",
                 )
+
+    def _check_data_quality(
+        self,
+        X: pd.DataFrame,
+        batch_ser: pd.Series,
+        disc: pd.DataFrame | pd.Series | None,
+        cont: pd.DataFrame | pd.Series | None,
+    ) -> None:
+        """Issue warnings for data quality issues that may affect results."""
+        # Near-zero variance features
+        var = X.var(axis=0)
+        near_zero = var[var < self._NEAR_ZERO_VAR_THRESH].index.tolist()
+        if near_zero:
+            preview = near_zero[:5]
+            suffix = f"... ({len(near_zero)} total)" if len(near_zero) > 5 else ""
+            warnings.warn(
+                f"{len(near_zero)} feature(s) have near-zero variance "
+                f"(< {self._NEAR_ZERO_VAR_THRESH}): {preview}{suffix}. "
+                f"ComBat standardization divides by sqrt(pooled variance), which may "
+                f"amplify noise in these features. Consider removing them.",
+                UserWarning,
+                stacklevel=3,
+            )
+
+        # Highly imbalanced batches
+        counts = batch_ser.value_counts()
+        ratio = counts.max() / counts.min()
+        if ratio > self._IMBALANCE_RATIO_THRESH:
+            warnings.warn(
+                f"Batch sizes are highly imbalanced (ratio {ratio:.1f}:1). "
+                f"Largest: '{counts.idxmax()}' ({counts.max()} samples), "
+                f"smallest: '{counts.idxmin()}' ({counts.min()} samples). "
+                f"Empirical Bayes estimates may be unreliable for small batches.",
+                UserWarning,
+                stacklevel=3,
+            )
+
+        # Covariate collinearity with batch (fortin/chen only)
+        if self.method.lower() in {"fortin", "chen"} and (disc is not None or cont is not None):
+            batch_dummies = pd.get_dummies(batch_ser, drop_first=True).astype(float)
+            cov_parts: list[pd.DataFrame] = []
+            if disc is not None:
+                d = disc if isinstance(disc, pd.DataFrame) else disc.to_frame()
+                cov_parts.append(
+                    pd.get_dummies(d.astype("category"), drop_first=True).astype(float)
+                )
+            if cont is not None:
+                c = cont if isinstance(cont, pd.DataFrame) else cont.to_frame()
+                cov_parts.append(c.astype(float))
+            cov_df = pd.concat(cov_parts, axis=1)
+            design = pd.concat([batch_dummies, cov_df], axis=1)
+            rank = la.matrix_rank(design.values)
+            if rank < design.shape[1]:
+                warnings.warn(
+                    f"Design matrix is rank-deficient (rank={rank}, "
+                    f"columns={design.shape[1]}). One or more covariates may be "
+                    f"perfectly collinear with batch indicators, which can lead to "
+                    f"unstable parameter estimates. Check whether any covariate "
+                    f"perfectly predicts batch membership.",
+                    UserWarning,
+                    stacklevel=3,
+                )
+
+    @staticmethod
+    def _batch_variance_explained(X: npt.NDArray[Any], batch_labels: npt.NDArray[Any]) -> float:
+        """Fraction of total variance explained by batch (mean across features)."""
+        grand_mean = X.mean(axis=0)
+        ss_total = float(((X - grand_mean) ** 2).sum())
+        if ss_total == 0:
+            return 0.0
+        ss_between = 0.0
+        for lvl in np.unique(batch_labels):
+            mask = batch_labels == lvl
+            batch_mean = X[mask].mean(axis=0)
+            ss_between += float(mask.sum()) * float(((batch_mean - grand_mean) ** 2).sum())
+        return ss_between / ss_total
 
     def fit(self, X: ArrayLike, y: ArrayLike | None = None) -> ComBat:
         """Fit the ComBat model.
@@ -121,13 +213,15 @@ class ComBat(ComBatMetricsMixin, ComBatVisualizationMixin, BaseEstimator, Transf
 
         if isinstance(X, pd.DataFrame):
             self.feature_names_in_ = np.asarray(X.columns, dtype=object)
+            X_df = X
         else:
             self.feature_names_in_ = np.asarray(
                 [f"x{i}" for i in range(np.asarray(X).shape[1])], dtype=object
             )
+            X_df = pd.DataFrame(X)
 
         self._model = ComBatModel(
-            method=self.method,
+            method=self.method,  # type: ignore[arg-type]
             parametric=self.parametric,
             mean_only=self.mean_only,
             reference_batch=self.reference_batch,
@@ -138,13 +232,20 @@ class ComBat(ComBatMetricsMixin, ComBatVisualizationMixin, BaseEstimator, Transf
         batch_vec = self._subset(self.batch, idx)
         disc = self._subset(self.discrete_covariates, idx)
         cont = self._subset(self.continuous_covariates, idx)
+
+        self._check_data_quality(X_df, batch_vec, disc, cont)  # type: ignore[arg-type]
+
         self._model.fit(
             X,
-            batch=batch_vec,
+            batch=batch_vec,  # type: ignore[arg-type]
             discrete_covariates=disc,
             continuous_covariates=cont,
         )
         self._fitted_batch = batch_vec
+
+        batch_arr = np.asarray(batch_vec)
+        self._batch_var_before_ = self._batch_variance_explained(X_df.values, batch_arr)
+
         return self
 
     def transform(self, X: ArrayLike) -> pd.DataFrame:
@@ -165,19 +266,24 @@ class ComBat(ComBatMetricsMixin, ComBatVisualizationMixin, BaseEstimator, Transf
         batch_vec = self._subset(self.batch, idx)
         disc = self._subset(self.discrete_covariates, idx)
         cont = self._subset(self.continuous_covariates, idx)
-        return self._model.transform(
+        X_transformed = self._model.transform(
             X,
-            batch=batch_vec,
+            batch=batch_vec,  # type: ignore[arg-type]
             discrete_covariates=disc,
             continuous_covariates=cont,
         )
+
+        batch_arr = np.asarray(batch_vec)
+        self._batch_var_after_ = self._batch_variance_explained(X_transformed.values, batch_arr)
+
+        return X_transformed
 
     @staticmethod
     def _subset(obj: ArrayLike | None, idx: pd.Index) -> pd.DataFrame | pd.Series | None:
         """Subset array-like object by index."""
         if obj is None:
             return None
-        if isinstance(obj, (pd.Series, pd.DataFrame)):
+        if isinstance(obj, pd.Series | pd.DataFrame):
             return obj.loc[idx]
         else:
             if isinstance(obj, np.ndarray) and obj.ndim == 1:
@@ -212,7 +318,7 @@ class ComBat(ComBatMetricsMixin, ComBatVisualizationMixin, BaseEstimator, Transf
 
         return X_transformed
 
-    def get_feature_names_out(self, input_features: ArrayLike | None = None) -> np.ndarray:
+    def get_feature_names_out(self, input_features: ArrayLike | None = None) -> npt.NDArray[Any]:
         """Get output feature names for transform.
 
         Parameters
@@ -249,7 +355,7 @@ class ComBat(ComBatMetricsMixin, ComBatVisualizationMixin, BaseEstimator, Transf
         if not hasattr(self, "_model") or not hasattr(self._model, "_gamma_star"):
             raise ValueError("This ComBat instance is not fitted yet. Call 'fit' before 'summary'.")
 
-        lines = []
+        lines: list[str] = []
         lines.append("ComBat Summary")
         lines.append("=" * 40)
         lines.append(f"Method:          {self.method}")
@@ -273,5 +379,35 @@ class ComBat(ComBatMetricsMixin, ComBatVisualizationMixin, BaseEstimator, Transf
         top5 = importance.head(5)
         for feat, row in top5.iterrows():
             lines.append(f"  {feat}: {row['combined']:.4f}")
+
+        # Diagnostics table
+        lines.append("")
+        lines.append("Diagnostics")
+        lines.append("=" * 40)
+        col_w = 34
+        lines.append(f"{'Metric':<{col_w}}Value")
+        lines.append(f"{'------':<{col_w}}-----")
+
+        if hasattr(self, "_batch_var_before_"):
+            lines.append(f"{'Batch var. explained (before)':<{col_w}}{self._batch_var_before_:.1%}")
+        if hasattr(self, "_batch_var_after_"):
+            lines.append(f"{'Batch var. explained (after)':<{col_w}}{self._batch_var_after_:.1%}")
+
+        design_cond = getattr(self._model, "_design_cond", None)
+        if design_cond is not None:
+            lines.append(f"{'Design matrix condition number':<{col_w}}{design_cond:.1f}")
+
+        conv_info = getattr(self._model, "_convergence_info", [])
+        if conv_info:
+            eb_type = "parametric" if self.parametric else "non-parametric"
+            lines.append(f"EB convergence ({eb_type}):")
+            for info in conv_info:
+                batch_name = info["batch"]
+                if info["converged"]:
+                    status = f"converged ({info['iterations']} iter)"
+                else:
+                    max_change = max(info["final_gamma_change"], info["final_delta_change"])
+                    status = f"NOT CONVERGED ({info['iterations']} iter, \u0394={max_change:.2e})"
+                lines.append(f"  {batch_name!s:<{col_w - 2}}{status}")
 
         return "\n".join(lines)

@@ -1,3 +1,5 @@
+import warnings
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -148,7 +150,7 @@ def test_reference_batch_missing_raises():
     Asking for a reference batch that doesn't exist should fail.
     """
     X, batch = simulate_data()
-    with pytest.raises(ValueError, match="not present"):
+    with pytest.raises(ValueError, match="not found"):
         ComBat(batch=batch, reference_batch="DOES_NOT_EXIST").fit(X)
 
 
@@ -230,10 +232,10 @@ def test_covbat_cov_thresh_invalid_float_raises():
     """
     Test that invalid float values for covbat_cov_thresh raise ValueError.
     """
-    with pytest.raises(ValueError, match="must be in \\(0, 1\\]"):
+    with pytest.raises(ValueError, match="out of range"):
         ComBatModel(covbat_cov_thresh=1.5)
 
-    with pytest.raises(ValueError, match="must be in \\(0, 1\\]"):
+    with pytest.raises(ValueError, match="out of range"):
         ComBatModel(covbat_cov_thresh=0.0)
 
 
@@ -241,7 +243,7 @@ def test_covbat_cov_thresh_invalid_int_raises():
     """
     Test that invalid int values for covbat_cov_thresh raise ValueError.
     """
-    with pytest.raises(ValueError, match="must be >= 1"):
+    with pytest.raises(ValueError, match="invalid"):
         ComBatModel(covbat_cov_thresh=0)
 
 
@@ -367,7 +369,7 @@ def test_invalid_method_raises():
     Test that an invalid method raises ValueError.
     """
     X, batch = simulate_data()
-    with pytest.raises(ValueError, match="method must be"):
+    with pytest.raises(ValueError, match="not recognized"):
         ComBatModel(method="invalid").fit(X, batch=batch)
 
 
@@ -686,7 +688,7 @@ def test_fit_nan_in_batch_raises():
     """Fitting with NaN in batch must raise ValueError."""
     X, batch = simulate_data()
     batch.iloc[0] = np.nan
-    with pytest.raises(ValueError, match="batch contains NaN"):
+    with pytest.raises(ValueError, match=r"batch contains.*NaN"):
         ComBat(batch=batch).fit(X)
 
 
@@ -694,7 +696,7 @@ def test_fit_nan_in_discrete_covariates_raises():
     """Fitting with NaN in discrete covariates must raise ValueError."""
     X, batch, disc, cont = simulate_covariate_data()
     disc.iloc[0, 0] = np.nan
-    with pytest.raises(ValueError, match="discrete_covariates contains NaN"):
+    with pytest.raises(ValueError, match=r"discrete_covariates contains.*NaN"):
         ComBat(
             batch=batch, discrete_covariates=disc, continuous_covariates=cont, method="fortin"
         ).fit(X)
@@ -849,3 +851,158 @@ def test_set_params_updates_method():
     combat.set_params(method="fortin")
     combat.fit(X)
     assert combat._model.method == "fortin"
+
+
+@pytest.mark.parametrize("method", ["fortin", "chen"])
+def test_transform_subset_of_batches(method):
+    """Transform with a subset of fitted batches must not crash."""
+    X, batch, disc, cont = simulate_covariate_data()
+    combat = ComBat(
+        batch=batch,
+        discrete_covariates=disc,
+        continuous_covariates=cont,
+        method=method,
+    ).fit(X)
+
+    # Transform only samples from batch A and B (drop C)
+    mask = batch != "C"
+    X_sub = X.loc[mask]
+    X_corr = combat.transform(X_sub)
+    assert X_corr.shape == X_sub.shape
+    assert not np.isnan(X_corr.values).any()
+
+
+@pytest.mark.parametrize("method", ["fortin", "chen"])
+def test_transform_new_covariate_levels(method):
+    """Transform with unseen discrete covariate levels must not crash."""
+    X, batch, disc, cont = simulate_covariate_data()
+    combat = ComBat(
+        batch=batch,
+        discrete_covariates=disc,
+        continuous_covariates=cont,
+        method=method,
+    ).fit(X)
+
+    # Introduce a new covariate level at transform time
+    disc_new = disc.copy()
+    disc_new.iloc[0, 0] = "diag_3"
+    combat_new = ComBat(
+        batch=batch,
+        discrete_covariates=disc_new,
+        continuous_covariates=cont,
+        method=method,
+    )
+    combat_new._model = combat._model
+    combat_new.feature_names_in_ = combat.feature_names_in_
+    X_corr = combat_new.transform(X)
+    assert X_corr.shape == X.shape
+    assert not np.isnan(X_corr.values).any()
+
+
+def test_error_message_includes_received_value():
+    """Error messages should include the received value."""
+    with pytest.raises(ValueError, match=r"1\.5"):
+        ComBatModel(covbat_cov_thresh=1.5)
+
+    with pytest.raises(TypeError, match="str"):
+        ComBatModel(covbat_cov_thresh="bad")
+
+
+def test_error_message_batch_too_small_includes_count():
+    """Batch-too-small error should include sample count and suggestion."""
+    X, batch = simulate_data()
+    batch.iloc[0] = "single"
+    with pytest.raises(ValueError, match=r"1 sample.*Consider merging"):
+        ComBatModel().fit(X, batch=batch)
+
+
+def test_error_message_reference_batch_lists_available():
+    """reference_batch error should list available batches."""
+    X, batch = simulate_data()
+    with pytest.raises(ValueError, match="Available batches"):
+        ComBatModel(reference_batch="MISSING").fit(X, batch=batch)
+
+
+def test_near_zero_variance_warns():
+    """Near-zero variance features should trigger a warning."""
+    X, batch = simulate_data(n_samples=60, n_features=10)
+    X["constant"] = 0.0
+    with pytest.warns(UserWarning, match="near-zero variance"):
+        ComBat(batch=batch).fit(X)
+
+
+def test_imbalanced_batches_warns():
+    """Highly imbalanced batches should trigger a warning."""
+    rng = np.random.default_rng(42)
+    n_large, n_small = 200, 5
+    n = n_large + 2 * n_small
+    X = pd.DataFrame(rng.standard_normal((n, 10)))
+    batch = pd.Series(["A"] * n_large + ["B"] * n_small + ["C"] * n_small)
+    with pytest.warns(UserWarning, match="imbalanced"):
+        ComBat(batch=batch).fit(X)
+
+
+def test_collinear_covariate_warns():
+    """Covariate perfectly collinear with batch should trigger a warning."""
+    X, batch, _disc, _cont = simulate_covariate_data()
+    # Make discrete covariate identical to batch
+    disc_collinear = batch.to_frame("cov")
+    with pytest.warns(UserWarning, match="rank-deficient"):
+        ComBat(
+            batch=batch,
+            discrete_covariates=disc_collinear,
+            method="fortin",
+        ).fit(X)
+
+
+def test_balanced_batches_no_imbalance_warning():
+    """Balanced batches should not trigger imbalance warning."""
+    X, batch = simulate_data()
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        ComBat(batch=batch).fit(X)
+
+
+def test_summary_variance_explained():
+    """summary() should contain variance explained before and after."""
+    X, batch = simulate_data()
+    combat = ComBat(batch=batch).fit(X)
+    combat.transform(X)
+    s = combat.summary()
+    assert "Batch var. explained (before)" in s
+    assert "Batch var. explained (after)" in s
+
+
+def test_summary_variance_explained_before_only():
+    """summary() after fit() only should show before but not after."""
+    X, batch = simulate_data()
+    combat = ComBat(batch=batch).fit(X)
+    s = combat.summary()
+    assert "Batch var. explained (before)" in s
+    assert "Batch var. explained (after)" not in s
+
+
+def test_summary_convergence_info():
+    """summary() should contain convergence info."""
+    X, batch = simulate_data()
+    combat = ComBat(batch=batch).fit(X)
+    s = combat.summary()
+    assert "converged" in s
+
+
+def test_summary_condition_number_fortin():
+    """summary() for fortin method should show condition number."""
+    X, batch, disc, cont = simulate_covariate_data()
+    combat = ComBat(
+        batch=batch, discrete_covariates=disc, continuous_covariates=cont, method="fortin"
+    ).fit(X)
+    s = combat.summary()
+    assert "Design matrix condition number" in s
+
+
+def test_summary_condition_number_absent_johnson():
+    """summary() for johnson method should NOT show condition number."""
+    X, batch = simulate_data()
+    combat = ComBat(batch=batch, method="johnson").fit(X)
+    s = combat.summary()
+    assert "Design matrix condition number" not in s
