@@ -12,12 +12,11 @@ import pandas as pd
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.utils.validation import check_array, check_is_fitted
 
+from ._utils import _subset
 from .core import ArrayLike, ComBatModel
-from .metrics import ComBatMetricsMixin
-from .visualization import ComBatVisualizationMixin
 
 
-class ComBat(ComBatMetricsMixin, ComBatVisualizationMixin, BaseEstimator, TransformerMixin):  # type: ignore[misc]
+class ComBat(BaseEstimator, TransformerMixin):  # type: ignore[misc]
     """Pipeline-friendly wrapper around `ComBatModel`.
 
     Stores batch (and optional covariates) passed at construction and
@@ -43,8 +42,6 @@ class ComBat(ComBatMetricsMixin, ComBatVisualizationMixin, BaseEstimator, Transf
         Numerical jitter for stability.
     covbat_cov_thresh : float or int, default=0.9
         CovBat variance threshold for PCs.
-    compute_metrics : bool, default=False
-        If True, ``fit_transform`` caches batch metrics in ``metrics_``.
     """
 
     _NEAR_ZERO_VAR_THRESH: float = 1e-10
@@ -62,7 +59,6 @@ class ComBat(ComBatMetricsMixin, ComBatVisualizationMixin, BaseEstimator, Transf
         reference_batch: str | None = None,
         eps: float = 1e-8,
         covbat_cov_thresh: float | int = 0.9,
-        compute_metrics: bool = False,
     ) -> None:
         self.batch = batch
         self.discrete_covariates = discrete_covariates
@@ -73,7 +69,6 @@ class ComBat(ComBatMetricsMixin, ComBatVisualizationMixin, BaseEstimator, Transf
         self.reference_batch = reference_batch
         self.eps = eps
         self.covbat_cov_thresh = covbat_cov_thresh
-        self.compute_metrics = compute_metrics
 
     def _validate_inputs(self, X: ArrayLike, *, fitting: bool = False) -> None:
         """Validate X and, during fitting, batch/covariates for NaN/Inf."""
@@ -229,9 +224,9 @@ class ComBat(ComBatMetricsMixin, ComBatVisualizationMixin, BaseEstimator, Transf
             covbat_cov_thresh=self.covbat_cov_thresh,
         )
 
-        batch_vec = self._subset(self.batch, idx)
-        disc = self._subset(self.discrete_covariates, idx)
-        cont = self._subset(self.continuous_covariates, idx)
+        batch_vec = _subset(self.batch, idx)
+        disc = _subset(self.discrete_covariates, idx)
+        cont = _subset(self.continuous_covariates, idx)
 
         self._check_data_quality(X_df, batch_vec, disc, cont)  # type: ignore[arg-type]
 
@@ -263,9 +258,9 @@ class ComBat(ComBatMetricsMixin, ComBatVisualizationMixin, BaseEstimator, Transf
         """
         self._validate_inputs(X)
         idx = X.index if isinstance(X, pd.DataFrame) else pd.RangeIndex(len(X))
-        batch_vec = self._subset(self.batch, idx)
-        disc = self._subset(self.discrete_covariates, idx)
-        cont = self._subset(self.continuous_covariates, idx)
+        batch_vec = _subset(self.batch, idx)
+        disc = _subset(self.discrete_covariates, idx)
+        cont = _subset(self.continuous_covariates, idx)
         X_transformed = self._model.transform(
             X,
             batch=batch_vec,  # type: ignore[arg-type]
@@ -275,46 +270,6 @@ class ComBat(ComBatMetricsMixin, ComBatVisualizationMixin, BaseEstimator, Transf
 
         batch_arr = np.asarray(batch_vec)
         self._batch_var_after_ = self._batch_variance_explained(X_transformed.values, batch_arr)
-
-        return X_transformed
-
-    @staticmethod
-    def _subset(obj: ArrayLike | None, idx: pd.Index) -> pd.DataFrame | pd.Series | None:
-        """Subset array-like object by index."""
-        if obj is None:
-            return None
-        if isinstance(obj, pd.Series | pd.DataFrame):
-            return obj.loc[idx]
-        else:
-            if isinstance(obj, np.ndarray) and obj.ndim == 1:
-                return pd.Series(obj, index=idx)
-            else:
-                return pd.DataFrame(obj, index=idx)
-
-    def fit_transform(self, X: ArrayLike, y: ArrayLike | None = None) -> pd.DataFrame:
-        """
-        Fit and transform the data, optionally computing metrics.
-
-        If ``compute_metrics=True`` was set at construction, batch effect
-        metrics are computed and cached in the ``metrics_`` property.
-
-        Parameters
-        ----------
-        X : array-like of shape (n_samples, n_features)
-            Input data to fit and transform.
-        y : None
-            Ignored. Present for API compatibility.
-
-        Returns
-        -------
-        X_transformed : pd.DataFrame
-            Batch-corrected data.
-        """
-        self.fit(X, y)
-        X_transformed = self.transform(X)
-
-        if self.compute_metrics:
-            self._metrics_cache = self.compute_batch_metrics(X)
 
         return X_transformed
 
@@ -338,76 +293,3 @@ class ComBat(ComBatMetricsMixin, ComBatVisualizationMixin, BaseEstimator, Transf
         """
         check_is_fitted(self, "feature_names_in_")
         return self.feature_names_in_
-
-    def summary(self) -> str:
-        """Return a human-readable diagnostic report after fitting.
-
-        Returns
-        -------
-        str
-            Multi-line summary string.
-
-        Raises
-        ------
-        ValueError
-            If the model is not fitted.
-        """
-        if not hasattr(self, "_model") or not hasattr(self._model, "_gamma_star"):
-            raise ValueError("This ComBat instance is not fitted yet. Call 'fit' before 'summary'.")
-
-        lines: list[str] = []
-        lines.append("ComBat Summary")
-        lines.append("=" * 40)
-        lines.append(f"Method:          {self.method}")
-        lines.append(f"Parametric:      {self.parametric}")
-        lines.append(f"Mean only:       {self.mean_only}")
-        lines.append(f"Reference batch: {self.reference_batch or 'None'}")
-
-        batch_levels = self._model._batch_levels
-        n_per_batch = self._model._n_per_batch
-        lines.append(f"Number of batches: {len(batch_levels)}")
-        lines.append("Samples per batch:")
-        for lvl in batch_levels:
-            lines.append(f"  {lvl}: {n_per_batch[str(lvl)]}")
-
-        n_features = len(self._model._grand_mean)
-        lines.append(f"Number of features: {n_features}")
-
-        lines.append("")
-        lines.append("Top 5 features by batch effect (combined):")
-        importance = self.feature_batch_importance()
-        top5 = importance.head(5)
-        for feat, row in top5.iterrows():
-            lines.append(f"  {feat}: {row['combined']:.4f}")
-
-        # Diagnostics table
-        lines.append("")
-        lines.append("Diagnostics")
-        lines.append("=" * 40)
-        col_w = 34
-        lines.append(f"{'Metric':<{col_w}}Value")
-        lines.append(f"{'------':<{col_w}}-----")
-
-        if hasattr(self, "_batch_var_before_"):
-            lines.append(f"{'Batch var. explained (before)':<{col_w}}{self._batch_var_before_:.1%}")
-        if hasattr(self, "_batch_var_after_"):
-            lines.append(f"{'Batch var. explained (after)':<{col_w}}{self._batch_var_after_:.1%}")
-
-        design_cond = getattr(self._model, "_design_cond", None)
-        if design_cond is not None:
-            lines.append(f"{'Design matrix condition number':<{col_w}}{design_cond:.1f}")
-
-        conv_info = getattr(self._model, "_convergence_info", [])
-        if conv_info:
-            eb_type = "parametric" if self.parametric else "non-parametric"
-            lines.append(f"EB convergence ({eb_type}):")
-            for info in conv_info:
-                batch_name = info["batch"]
-                if info["converged"]:
-                    status = f"converged ({info['iterations']} iter)"
-                else:
-                    max_change = max(info["final_gamma_change"], info["final_delta_change"])
-                    status = f"NOT CONVERGED ({info['iterations']} iter, \u0394={max_change:.2e})"
-                lines.append(f"  {batch_name!s:<{col_w - 2}}{status}")
-
-        return "\n".join(lines)

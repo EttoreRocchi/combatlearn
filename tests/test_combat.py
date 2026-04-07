@@ -14,9 +14,7 @@ from combatlearn.core import ComBatModel
 
 
 def test_transform_without_fit_raises():
-    """
-    Test that `transform` raises a `ValueError` if not fitted.
-    """
+    """Test that `transform` raises a `ValueError` if not fitted."""
     X, batch = simulate_data()
     model = ComBatModel()
     with pytest.raises(ValueError, match="not fitted"):
@@ -24,9 +22,7 @@ def test_transform_without_fit_raises():
 
 
 def test_unseen_batch_raises_value_error():
-    """
-    Test that unseen batch raises a `ValueError`.
-    """
+    """Test that unseen batch raises a `ValueError`."""
     X, batch = simulate_data()
     model = ComBatModel().fit(X, batch=batch)
     new_batch = pd.Series(["Z"] * len(batch), index=batch.index)
@@ -35,9 +31,7 @@ def test_unseen_batch_raises_value_error():
 
 
 def test_single_sample_batch_error():
-    """
-    Test that a single sample batch raises a `ValueError`.
-    """
+    """Test that a single sample batch raises a `ValueError`."""
     X, batch = simulate_data()
     batch.iloc[0] = "single"
     with pytest.raises(ValueError):
@@ -50,7 +44,7 @@ def test_dtypes_preserved(method):
     if method == "johnson":
         X, batch = simulate_data()
         extra = {}
-    else:  # fortin  or  chen
+    else:
         X, batch, disc, cont = simulate_covariate_data()
         extra = {"discrete_covariates": disc, "continuous_covariates": cont}
 
@@ -59,9 +53,7 @@ def test_dtypes_preserved(method):
 
 
 def test_wrapper_clone_and_pipeline():
-    """
-    Test `ComBat` wrapper can be cloned and used in a `Pipeline`.
-    """
+    """Test `ComBat` wrapper can be cloned and used in a `Pipeline`."""
     X, batch = simulate_data()
     wrapper = ComBat(batch=batch, parametric=True)
     pipe = Pipeline(
@@ -82,7 +74,7 @@ def test_no_nan_or_inf_in_output(method):
     if method == "johnson":
         X, batch = simulate_data()
         extra = {}
-    else:  # fortin  or  chen
+    else:
         X, batch, disc, cont = simulate_covariate_data()
         extra = {"discrete_covariates": disc, "continuous_covariates": cont}
 
@@ -111,9 +103,7 @@ def test_shape_preserved(method):
 
 
 def test_johnson_print_warning():
-    """
-    Test that a warning is printed when using the Johnson method.
-    """
+    """Test that a warning is printed when using the Johnson method."""
     X, batch, disc, cont = simulate_covariate_data()
     with pytest.warns(Warning, match="Covariates are ignored when using method='johnson'."):
         _ = ComBat(
@@ -126,10 +116,7 @@ def test_johnson_print_warning():
 
 @pytest.mark.parametrize("method", ["johnson", "fortin", "chen"])
 def test_reference_batch_samples_unchanged(method):
-    """
-    Samples belonging to the reference batch must come out *numerically identical*
-    (within floating-point jitter) after correction.
-    """
+    """Samples belonging to the reference batch must come out numerically identical."""
     if method == "johnson":
         X, batch = simulate_data()
         extra = {}
@@ -146,9 +133,7 @@ def test_reference_batch_samples_unchanged(method):
 
 
 def test_reference_batch_missing_raises():
-    """
-    Asking for a reference batch that doesn't exist should fail.
-    """
+    """Asking for a reference batch that doesn't exist should fail."""
     X, batch = simulate_data()
     with pytest.raises(ValueError, match="not found"):
         ComBat(batch=batch, reference_batch="DOES_NOT_EXIST").fit(X)
@@ -157,9 +142,7 @@ def test_reference_batch_missing_raises():
 @pytest.mark.parametrize("parametric", [True, False])
 @pytest.mark.parametrize("method", ["johnson", "fortin", "chen"])
 def test_parametric_vs_nonparametric(parametric, method):
-    """
-    Test both parametric and non-parametric modes work without errors.
-    """
+    """Test both parametric and non-parametric modes work without errors."""
     if method == "johnson":
         X, batch = simulate_data()
         extra = {}
@@ -176,9 +159,7 @@ def test_parametric_vs_nonparametric(parametric, method):
 @pytest.mark.parametrize("mean_only", [True, False])
 @pytest.mark.parametrize("method", ["johnson", "fortin", "chen"])
 def test_mean_only_mode(mean_only, method):
-    """
-    Test mean_only mode works for all methods.
-    """
+    """Test mean_only mode works for all methods."""
     if method == "johnson":
         X, batch = simulate_data()
         extra = {}
@@ -193,9 +174,7 @@ def test_mean_only_mode(mean_only, method):
 
 
 def test_covbat_cov_thresh_as_float():
-    """
-    Test CovBat with covbat_cov_thresh as float (cumulative variance threshold).
-    """
+    """Test CovBat with covbat_cov_thresh as float."""
     X, batch, disc, cont = simulate_covariate_data()
     combat = ComBat(
         batch=batch,
@@ -210,9 +189,7 @@ def test_covbat_cov_thresh_as_float():
 
 
 def test_covbat_cov_thresh_as_int():
-    """
-    Test CovBat with covbat_cov_thresh as int (number of components).
-    """
+    """Test CovBat with covbat_cov_thresh as int."""
     X, batch, disc, cont = simulate_covariate_data()
     n_components = 10
     combat = ComBat(
@@ -229,37 +206,28 @@ def test_covbat_cov_thresh_as_int():
 
 
 def test_covbat_cov_thresh_invalid_float_raises():
-    """
-    Test that invalid float values for covbat_cov_thresh raise ValueError.
-    """
+    """Test that invalid float values for covbat_cov_thresh raise ValueError."""
     with pytest.raises(ValueError, match="out of range"):
         ComBatModel(covbat_cov_thresh=1.5)
-
     with pytest.raises(ValueError, match="out of range"):
         ComBatModel(covbat_cov_thresh=0.0)
 
 
 def test_covbat_cov_thresh_invalid_int_raises():
-    """
-    Test that invalid int values for covbat_cov_thresh raise ValueError.
-    """
+    """Test that invalid int values for covbat_cov_thresh raise ValueError."""
     with pytest.raises(ValueError, match="invalid"):
         ComBatModel(covbat_cov_thresh=0)
 
 
 def test_covbat_cov_thresh_invalid_type_raises():
-    """
-    Test that invalid types for covbat_cov_thresh raise TypeError.
-    """
+    """Test that invalid types for covbat_cov_thresh raise TypeError."""
     with pytest.raises(TypeError, match="must be float or int"):
         ComBatModel(covbat_cov_thresh="invalid")
 
 
 @pytest.mark.parametrize("method", ["johnson", "fortin", "chen"])
 def test_index_preserved(method):
-    """
-    Test that the index is preserved after transformation.
-    """
+    """Test that the index is preserved after transformation."""
     if method == "johnson":
         X, batch = simulate_data()
         extra = {}
@@ -281,9 +249,7 @@ def test_index_preserved(method):
 
 @pytest.mark.parametrize("method", ["johnson", "fortin", "chen"])
 def test_column_names_preserved(method):
-    """
-    Test that column names are preserved after transformation.
-    """
+    """Test that column names are preserved after transformation."""
     if method == "johnson":
         X, batch = simulate_data()
         extra = {}
@@ -299,363 +265,11 @@ def test_column_names_preserved(method):
     assert list(X_corr.columns) == custom_columns
 
 
-def test_plot_transformation_static_2d():
-    """
-    Test plot_transformation with static 2D PCA visualization.
-    """
-    X, batch = simulate_data(n_samples=100, n_features=20)
-    combat = ComBat(batch=batch, method="johnson").fit(X)
-
-    fig = combat.plot_transformation(X, reduction_method="pca", n_components=2, plot_type="static")
-    assert fig is not None
-
-
-def test_plot_transformation_static_3d():
-    """
-    Test plot_transformation with static 3D PCA visualization.
-    """
-    X, batch = simulate_data(n_samples=100, n_features=20)
-    combat = ComBat(batch=batch, method="johnson").fit(X)
-
-    fig = combat.plot_transformation(X, reduction_method="pca", n_components=3, plot_type="static")
-    assert fig is not None
-
-
-def test_plot_transformation_return_embeddings():
-    """
-    Test that plot_transformation can return embeddings.
-    """
-    X, batch = simulate_data(n_samples=100, n_features=20)
-    combat = ComBat(batch=batch, method="johnson").fit(X)
-
-    fig, embeddings = combat.plot_transformation(
-        X,
-        reduction_method="pca",
-        n_components=2,
-        plot_type="static",
-        return_embeddings=True,
-    )
-    assert fig is not None
-    assert "original" in embeddings
-    assert "transformed" in embeddings
-    assert embeddings["original"].shape == (100, 2)
-    assert embeddings["transformed"].shape == (100, 2)
-
-
-def test_plot_transformation_invalid_method_raises():
-    """
-    Test that invalid reduction_method raises ValueError.
-    """
-    X, batch = simulate_data(n_samples=100, n_features=20)
-    combat = ComBat(batch=batch, method="johnson").fit(X)
-
-    with pytest.raises(ValueError, match="reduction_method must be"):
-        combat.plot_transformation(X, reduction_method="invalid")
-
-
-def test_plot_transformation_invalid_n_components_raises():
-    """
-    Test that invalid n_components raises ValueError.
-    """
-    X, batch = simulate_data(n_samples=100, n_features=20)
-    combat = ComBat(batch=batch, method="johnson").fit(X)
-
-    with pytest.raises(ValueError, match="n_components must be 2 or 3"):
-        combat.plot_transformation(X, n_components=4)
-
-
 def test_invalid_method_raises():
-    """
-    Test that an invalid method raises ValueError.
-    """
+    """Test that an invalid method raises ValueError."""
     X, batch = simulate_data()
     with pytest.raises(ValueError, match="not recognized"):
         ComBatModel(method="invalid").fit(X, batch=batch)
-
-
-def test_compute_metrics_caches_in_metrics_property():
-    """
-    Test that compute_metrics=True caches metrics in metrics_ property.
-    """
-    X, batch = simulate_data(n_samples=100, n_features=20)
-
-    combat = ComBat(batch=batch, method="johnson", compute_metrics=True)
-    _ = combat.fit_transform(X)
-
-    assert combat.metrics_ is not None
-    assert "batch_effect" in combat.metrics_
-    assert "preservation" in combat.metrics_
-    assert "alignment" in combat.metrics_
-
-
-def test_compute_metrics_false_returns_none():
-    """
-    Test that metrics_ is None when compute_metrics=False.
-    """
-    X, batch = simulate_data(n_samples=100, n_features=20)
-
-    combat = ComBat(batch=batch, method="johnson", compute_metrics=False)
-    _ = combat.fit_transform(X)
-
-    assert combat.metrics_ is None
-
-
-def test_compute_batch_metrics_returns_correct_structure():
-    """
-    Test that compute_batch_metrics returns the expected structure.
-    """
-    X, batch = simulate_data(n_samples=100, n_features=20)
-
-    combat = ComBat(batch=batch, method="johnson")
-    combat.fit(X)
-
-    metrics = combat.compute_batch_metrics(X, k_neighbors=[5, 10])
-
-    assert "batch_effect" in metrics
-    assert "silhouette" in metrics["batch_effect"]
-    assert "davies_bouldin" in metrics["batch_effect"]
-    assert "kbet" in metrics["batch_effect"]
-    assert "lisi" in metrics["batch_effect"]
-    assert "variance_ratio" in metrics["batch_effect"]
-
-    for metric_name in [
-        "silhouette",
-        "davies_bouldin",
-        "kbet",
-        "lisi",
-        "variance_ratio",
-    ]:
-        metric_vals = metrics["batch_effect"][metric_name]
-        assert "before" in metric_vals
-        assert "after" in metric_vals
-
-    assert "preservation" in metrics
-    assert "knn" in metrics["preservation"]
-    assert 5 in metrics["preservation"]["knn"]
-    assert 10 in metrics["preservation"]["knn"]
-    assert "distance_correlation" in metrics["preservation"]
-
-    assert "alignment" in metrics
-    assert "centroid_distance" in metrics["alignment"]
-    assert "levene_statistic" in metrics["alignment"]
-
-
-def test_compute_batch_metrics_not_fitted_raises():
-    """
-    Test that compute_batch_metrics raises ValueError if not fitted.
-    """
-    X, batch = simulate_data(n_samples=100, n_features=20)
-
-    combat = ComBat(batch=batch, method="johnson")
-
-    with pytest.raises(ValueError, match="not fitted"):
-        combat.compute_batch_metrics(X)
-
-
-def test_compute_batch_metrics_pca_components_validation():
-    """
-    Test that pca_components must be less than min(n_samples, n_features).
-    """
-    X, batch = simulate_data(n_samples=100, n_features=20)
-
-    combat = ComBat(batch=batch, method="johnson")
-    combat.fit(X)
-
-    # pca_components >= n_features should raise
-    with pytest.raises(ValueError, match=r"pca_components.*must be less than"):
-        combat.compute_batch_metrics(X, pca_components=20)
-
-    # pca_components > n_features should raise
-    with pytest.raises(ValueError, match=r"pca_components.*must be less than"):
-        combat.compute_batch_metrics(X, pca_components=50)
-
-    # Valid pca_components should work
-    metrics = combat.compute_batch_metrics(X, pca_components=10)
-    assert metrics is not None
-
-
-def test_compute_batch_metrics_no_pca_default():
-    """
-    Test that metrics are computed in original feature space by default (no PCA).
-    """
-    X, batch = simulate_data(n_samples=100, n_features=20)
-
-    combat = ComBat(batch=batch, method="johnson")
-    combat.fit(X)
-
-    # Default (pca_components=None) should work
-    metrics = combat.compute_batch_metrics(X)
-    assert metrics is not None
-    assert "batch_effect" in metrics
-
-
-def test_feature_importance_shape():
-    """Test that feature_batch_importance returns correct shape."""
-    X, batch = simulate_data(n_samples=100, n_features=25)
-    combat = ComBat(batch=batch, method="johnson").fit(X)
-
-    importance = combat.feature_batch_importance()
-    assert importance.shape == (25, 3)
-    assert list(importance.columns) == ["location", "scale", "combined"]
-
-
-def test_feature_importance_location_rms():
-    """Test that location is RMS of gamma across batches."""
-    X, batch = simulate_data(n_samples=100, n_features=25)
-    combat = ComBat(batch=batch, method="johnson").fit(X)
-
-    importance = combat.feature_batch_importance()
-    gamma_star = combat._model._gamma_star
-    expected_location = np.sqrt((gamma_star**2).mean(axis=0))
-
-    # Sort to compare in same order
-    np.testing.assert_allclose(
-        importance.sort_index()["location"].values,
-        expected_location,
-        rtol=1e-10,
-    )
-
-
-def test_feature_importance_scale_rms():
-    """Test that scale is RMS of log(delta) across batches."""
-    X, batch = simulate_data(n_samples=100, n_features=25)
-    combat = ComBat(batch=batch, method="johnson").fit(X)
-
-    importance = combat.feature_batch_importance()
-    delta_star = combat._model._delta_star
-    expected_scale = np.sqrt((np.log(delta_star) ** 2).mean(axis=0))
-
-    np.testing.assert_allclose(
-        importance.sort_index()["scale"].values,
-        expected_scale,
-        rtol=1e-10,
-    )
-
-
-def test_feature_importance_combined_euclidean():
-    """Test that combined is Euclidean norm of location and scale."""
-    X, batch = simulate_data(n_samples=100, n_features=25)
-    combat = ComBat(batch=batch, method="johnson").fit(X)
-
-    importance = combat.feature_batch_importance()
-    expected_combined = np.sqrt(importance["location"] ** 2 + importance["scale"] ** 2)
-
-    np.testing.assert_allclose(
-        importance["combined"].values,
-        expected_combined.values,
-        rtol=1e-10,
-    )
-
-
-def test_feature_importance_mean_only_zero_scale():
-    """Test that scale is zero when mean_only=True."""
-    X, batch = simulate_data(n_samples=100, n_features=25)
-    combat = ComBat(batch=batch, method="johnson", mean_only=True).fit(X)
-
-    importance = combat.feature_batch_importance()
-
-    np.testing.assert_array_equal(importance["scale"].values, 0.0)
-    np.testing.assert_allclose(
-        importance["location"].values,
-        importance["combined"].values,
-        rtol=1e-10,
-    )
-
-
-def test_feature_importance_mode_magnitude():
-    """Test that magnitude mode returns raw values."""
-    X, batch = simulate_data(n_samples=100, n_features=25)
-    combat = ComBat(batch=batch, method="johnson").fit(X)
-
-    importance = combat.feature_batch_importance(mode="magnitude")
-
-    # Values should not sum to 1
-    assert importance["combined"].sum() != pytest.approx(1.0, rel=0.01)
-
-
-def test_feature_importance_mode_distribution_sums_to_one():
-    """Test that distribution mode normalizes each column to sum to 1."""
-    X, batch = simulate_data(n_samples=100, n_features=25)
-    combat = ComBat(batch=batch, method="johnson").fit(X)
-
-    importance = combat.feature_batch_importance(mode="distribution")
-
-    assert importance["location"].sum() == pytest.approx(1.0, rel=1e-10)
-    assert importance["scale"].sum() == pytest.approx(1.0, rel=1e-10)
-    assert importance["combined"].sum() == pytest.approx(1.0, rel=1e-10)
-
-
-def test_feature_importance_invalid_mode_raises():
-    """Test that invalid mode raises ValueError."""
-    X, batch = simulate_data(n_samples=100, n_features=25)
-    combat = ComBat(batch=batch, method="johnson").fit(X)
-
-    with pytest.raises(ValueError, match="mode must be"):
-        combat.feature_batch_importance(mode="invalid")
-
-
-def test_plot_feature_importance_kind_location():
-    """Test plot_feature_importance with kind='location'."""
-    X, batch = simulate_data(n_samples=100, n_features=25)
-    combat = ComBat(batch=batch, method="johnson").fit(X)
-
-    fig = combat.plot_feature_importance(kind="location")
-    assert fig is not None
-
-
-def test_plot_feature_importance_kind_scale():
-    """Test plot_feature_importance with kind='scale'."""
-    X, batch = simulate_data(n_samples=100, n_features=25)
-    combat = ComBat(batch=batch, method="johnson").fit(X)
-
-    fig = combat.plot_feature_importance(kind="scale")
-    assert fig is not None
-
-
-def test_plot_feature_importance_kind_combined_grouped():
-    """Test plot_feature_importance with kind='combined' shows grouped bars."""
-    X, batch = simulate_data(n_samples=100, n_features=25)
-    combat = ComBat(batch=batch, method="johnson").fit(X)
-
-    fig = combat.plot_feature_importance(kind="combined")
-    assert fig is not None
-
-    # Check that figure has axes with legend (grouped bars have legend)
-    ax = fig.axes[0]
-    legend = ax.get_legend()
-    assert legend is not None
-
-
-def test_plot_feature_importance_mode_magnitude():
-    """Test plot_feature_importance with mode='magnitude'."""
-    X, batch = simulate_data(n_samples=100, n_features=25)
-    combat = ComBat(batch=batch, method="johnson").fit(X)
-
-    fig = combat.plot_feature_importance(mode="magnitude")
-    assert fig is not None
-
-
-def test_plot_feature_importance_mode_distribution():
-    """Test plot_feature_importance with mode='distribution'."""
-    X, batch = simulate_data(n_samples=100, n_features=25)
-    combat = ComBat(batch=batch, method="johnson").fit(X)
-
-    fig = combat.plot_feature_importance(mode="distribution")
-    assert fig is not None
-
-
-def test_plot_feature_importance_distribution_shows_cumulative(capsys):
-    """Test that distribution mode prints cumulative contribution."""
-    X, batch = simulate_data(n_samples=100, n_features=25)
-    combat = ComBat(batch=batch, method="johnson").fit(X)
-
-    fig = combat.plot_feature_importance(mode="distribution", top_n=10)
-    assert fig is not None
-
-    # Check that cumulative percentage is printed to stdout
-    captured = capsys.readouterr()
-    assert "features explain" in captured.out
-    assert "%" in captured.out
 
 
 def test_fit_nan_in_X_raises():
@@ -712,38 +326,6 @@ def test_fit_nan_in_continuous_covariates_raises():
         ).fit(X)
 
 
-def test_metrics_nn_algorithm_ball_tree():
-    """compute_batch_metrics with nn_algorithm='ball_tree' must work."""
-    X, batch = simulate_data(n_samples=100, n_features=20)
-    combat = ComBat(batch=batch).fit(X)
-    metrics = combat.compute_batch_metrics(X, k_neighbors=[5], nn_algorithm="ball_tree")
-    assert "batch_effect" in metrics
-
-
-def test_metrics_nn_algorithm_kd_tree():
-    """compute_batch_metrics with nn_algorithm='kd_tree' must work."""
-    X, batch = simulate_data(n_samples=100, n_features=20)
-    combat = ComBat(batch=batch).fit(X)
-    metrics = combat.compute_batch_metrics(X, k_neighbors=[5], nn_algorithm="kd_tree")
-    assert "batch_effect" in metrics
-
-
-def test_metrics_nn_algorithm_brute():
-    """compute_batch_metrics with nn_algorithm='brute' must work."""
-    X, batch = simulate_data(n_samples=100, n_features=20)
-    combat = ComBat(batch=batch).fit(X)
-    metrics = combat.compute_batch_metrics(X, k_neighbors=[5], nn_algorithm="brute")
-    assert "batch_effect" in metrics
-
-
-def test_metrics_nn_algorithm_invalid_raises():
-    """compute_batch_metrics with invalid nn_algorithm must raise ValueError."""
-    X, batch = simulate_data(n_samples=100, n_features=20)
-    combat = ComBat(batch=batch).fit(X)
-    with pytest.raises(ValueError, match="nn_algorithm"):
-        combat.compute_batch_metrics(X, nn_algorithm="invalid")
-
-
 def test_get_feature_names_out_dataframe():
     """get_feature_names_out returns column names from DataFrame input."""
     X, batch = simulate_data(n_samples=100, n_features=10)
@@ -780,70 +362,6 @@ def test_set_output_pandas_in_pipeline():
     assert list(result.columns) == [f"feat_{i}" for i in range(10)]
 
 
-def test_summary_contains_method():
-    """summary() output contains the method name."""
-    X, batch = simulate_data()
-    combat = ComBat(batch=batch, method="johnson").fit(X)
-    s = combat.summary()
-    assert "johnson" in s
-
-
-def test_summary_contains_batch_info():
-    """summary() output contains batch count and sample counts."""
-    X, batch = simulate_data()
-    combat = ComBat(batch=batch).fit(X)
-    s = combat.summary()
-    assert "Number of batches: 3" in s
-    assert "A:" in s
-    assert "B:" in s
-    assert "C:" in s
-
-
-def test_summary_not_fitted_raises():
-    """summary() before fit raises ValueError."""
-    _X, batch = simulate_data()
-    combat = ComBat(batch=batch)
-    with pytest.raises(ValueError, match="not fitted"):
-        combat.summary()
-
-
-def test_heatmap_returns_figure():
-    """plot_batch_effect_heatmap returns a matplotlib Figure."""
-    import matplotlib.figure
-
-    X, batch = simulate_data(n_samples=100, n_features=25)
-    combat = ComBat(batch=batch).fit(X)
-    fig = combat.plot_batch_effect_heatmap(top_n=10)
-    assert isinstance(fig, matplotlib.figure.Figure)
-
-
-def test_heatmap_top_n():
-    """plot_batch_effect_heatmap respects top_n parameter."""
-    X, batch = simulate_data(n_samples=100, n_features=25)
-    combat = ComBat(batch=batch).fit(X)
-    fig = combat.plot_batch_effect_heatmap(top_n=10)
-    # With mean_only=False, 2 subplots
-    assert len(fig.axes) >= 2
-
-
-def test_heatmap_mean_only():
-    """plot_batch_effect_heatmap with mean_only=True shows only 1 heatmap."""
-    X, batch = simulate_data(n_samples=100, n_features=25)
-    combat = ComBat(batch=batch, mean_only=True).fit(X)
-    fig = combat.plot_batch_effect_heatmap(top_n=10)
-    # mean_only → 1 subplot (gamma only), but colorbar adds an extra axis
-    # so check the first axis title
-    assert "gamma" in fig.axes[0].get_title().lower()
-
-
-def test_heatmap_not_fitted_raises():
-    """plot_batch_effect_heatmap before fit raises ValueError."""
-    _X, batch = simulate_data()
-    combat = ComBat(batch=batch)
-    with pytest.raises(ValueError, match="not fitted"):
-        combat.plot_batch_effect_heatmap()
-
-
 def test_set_params_updates_method():
     """set_params must propagate to the model created at fit time."""
     X, batch = simulate_data()
@@ -864,7 +382,6 @@ def test_transform_subset_of_batches(method):
         method=method,
     ).fit(X)
 
-    # Transform only samples from batch A and B (drop C)
     mask = batch != "C"
     X_sub = X.loc[mask]
     X_corr = combat.transform(X_sub)
@@ -883,7 +400,6 @@ def test_transform_new_covariate_levels(method):
         method=method,
     ).fit(X)
 
-    # Introduce a new covariate level at transform time
     disc_new = disc.copy()
     disc_new.iloc[0, 0] = "diag_3"
     combat_new = ComBat(
@@ -903,7 +419,6 @@ def test_error_message_includes_received_value():
     """Error messages should include the received value."""
     with pytest.raises(ValueError, match=r"1\.5"):
         ComBatModel(covbat_cov_thresh=1.5)
-
     with pytest.raises(TypeError, match="str"):
         ComBatModel(covbat_cov_thresh="bad")
 
@@ -945,7 +460,6 @@ def test_imbalanced_batches_warns():
 def test_collinear_covariate_warns():
     """Covariate perfectly collinear with batch should trigger a warning."""
     X, batch, _disc, _cont = simulate_covariate_data()
-    # Make discrete covariate identical to batch
     disc_collinear = batch.to_frame("cov")
     with pytest.warns(UserWarning, match="rank-deficient"):
         ComBat(
@@ -961,48 +475,3 @@ def test_balanced_batches_no_imbalance_warning():
     with warnings.catch_warnings():
         warnings.simplefilter("error")
         ComBat(batch=batch).fit(X)
-
-
-def test_summary_variance_explained():
-    """summary() should contain variance explained before and after."""
-    X, batch = simulate_data()
-    combat = ComBat(batch=batch).fit(X)
-    combat.transform(X)
-    s = combat.summary()
-    assert "Batch var. explained (before)" in s
-    assert "Batch var. explained (after)" in s
-
-
-def test_summary_variance_explained_before_only():
-    """summary() after fit() only should show before but not after."""
-    X, batch = simulate_data()
-    combat = ComBat(batch=batch).fit(X)
-    s = combat.summary()
-    assert "Batch var. explained (before)" in s
-    assert "Batch var. explained (after)" not in s
-
-
-def test_summary_convergence_info():
-    """summary() should contain convergence info."""
-    X, batch = simulate_data()
-    combat = ComBat(batch=batch).fit(X)
-    s = combat.summary()
-    assert "converged" in s
-
-
-def test_summary_condition_number_fortin():
-    """summary() for fortin method should show condition number."""
-    X, batch, disc, cont = simulate_covariate_data()
-    combat = ComBat(
-        batch=batch, discrete_covariates=disc, continuous_covariates=cont, method="fortin"
-    ).fit(X)
-    s = combat.summary()
-    assert "Design matrix condition number" in s
-
-
-def test_summary_condition_number_absent_johnson():
-    """summary() for johnson method should NOT show condition number."""
-    X, batch = simulate_data()
-    combat = ComBat(batch=batch, method="johnson").fit(X)
-    s = combat.summary()
-    assert "Design matrix condition number" not in s

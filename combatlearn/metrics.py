@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import numpy.typing as npt
@@ -13,7 +13,11 @@ from sklearn.decomposition import PCA
 from sklearn.metrics import davies_bouldin_score, silhouette_score
 from sklearn.neighbors import NearestNeighbors
 
+from ._utils import _subset
 from .core import ArrayLike
+
+if TYPE_CHECKING:
+    from .sklearn_api import ComBat
 
 
 def _compute_pca_embedding(
@@ -623,225 +627,134 @@ def _compute_alignment_metrics(
     }
 
 
-class ComBatMetricsMixin:
-    """Mixin providing batch effect metrics for the ComBat wrapper."""
+def compute_batch_metrics(
+    combat: ComBat,
+    X: ArrayLike,
+    batch: ArrayLike | None = None,
+    *,
+    pca_components: int | None = None,
+    k_neighbors: list[int] | None = None,
+    kbet_k0: int | None = None,
+    lisi_perplexity: int = 30,
+    n_jobs: int = 1,
+    nn_algorithm: str = "auto",
+) -> dict[str, Any]:
+    """
+    Compute batch effect metrics before and after ComBat correction.
 
-    @property
-    def metrics_(self) -> dict[str, Any] | None:
-        """Return cached metrics from last fit_transform with compute_metrics=True.
+    Parameters
+    ----------
+    combat : ComBat
+        A fitted ``ComBat`` instance.
+    X : array-like of shape (n_samples, n_features)
+        Input data to evaluate.
+    batch : array-like of shape (n_samples,), optional
+        Batch labels. If None, uses the batch stored at construction.
+    pca_components : int, optional
+        Number of PCA components for dimensionality reduction before
+        computing metrics. If None (default), metrics are computed in
+        the original feature space. Must be less than min(n_samples, n_features).
+    k_neighbors : list of int, default=[5, 10, 50]
+        Values of k for k-NN preservation metric.
+    kbet_k0 : int, optional
+        Neighborhood size for kBET. Default is 10% of samples.
+    lisi_perplexity : int, default=30
+        Perplexity for LISI computation.
+    n_jobs : int, default=1
+        Number of parallel jobs for neighbor computations.
+    nn_algorithm : {'auto', 'ball_tree', 'kd_tree', 'brute'}, default='auto'
+        Algorithm used for nearest neighbor computation. Passed to
+        ``sklearn.neighbors.NearestNeighbors``.
 
-        Returns
-        -------
-        dict or None
-            Cached metrics dictionary, or None if no metrics have been computed.
-        """
-        return getattr(self, "_metrics_cache", None)
+    Returns
+    -------
+    dict
+        Dictionary with three main keys:
 
-    def compute_batch_metrics(
-        self,
-        X: ArrayLike,
-        batch: ArrayLike | None = None,
-        *,
-        pca_components: int | None = None,
-        k_neighbors: list[int] | None = None,
-        kbet_k0: int | None = None,
-        lisi_perplexity: int = 30,
-        n_jobs: int = 1,
-        nn_algorithm: str = "auto",
-    ) -> dict[str, Any]:
-        """
-        Compute batch effect metrics before and after ComBat correction.
+        - ``batch_effect``: Silhouette, Davies-Bouldin, kBET, LISI, variance ratio
+          (each with 'before' and 'after' values)
+        - ``preservation``: k-NN preservation fractions, distance correlation
+        - ``alignment``: Centroid distance, Levene statistic (each with
+          'before' and 'after' values)
 
-        Parameters
-        ----------
-        X : array-like of shape (n_samples, n_features)
-            Input data to evaluate.
-        batch : array-like of shape (n_samples,), optional
-            Batch labels. If None, uses the batch stored at construction.
-        pca_components : int, optional
-            Number of PCA components for dimensionality reduction before
-            computing metrics. If None (default), metrics are computed in
-            the original feature space. Must be less than min(n_samples, n_features).
-        k_neighbors : list of int, default=[5, 10, 50]
-            Values of k for k-NN preservation metric.
-        kbet_k0 : int, optional
-            Neighborhood size for kBET. Default is 10% of samples.
-        lisi_perplexity : int, default=30
-            Perplexity for LISI computation.
-        n_jobs : int, default=1
-            Number of parallel jobs for neighbor computations.
-        nn_algorithm : {'auto', 'ball_tree', 'kd_tree', 'brute'}, default='auto'
-            Algorithm used for nearest neighbor computation. Passed to
-            ``sklearn.neighbors.NearestNeighbors``.
+    Raises
+    ------
+    ValueError
+        If the model is not fitted or if pca_components is invalid.
+    """
+    _valid_nn = {"auto", "ball_tree", "kd_tree", "brute"}
+    if nn_algorithm not in _valid_nn:
+        raise ValueError(f"nn_algorithm must be one of {_valid_nn}, got '{nn_algorithm}'")
 
-        Returns
-        -------
-        dict
-            Dictionary with three main keys:
+    if not hasattr(combat, "_model") or not hasattr(combat._model, "_gamma_star"):
+        raise ValueError(
+            "This ComBat instance is not fitted yet. Call 'fit' before 'compute_batch_metrics'."
+        )
 
-            - ``batch_effect``: Silhouette, Davies-Bouldin, kBET, LISI, variance ratio
-              (each with 'before' and 'after' values)
-            - ``preservation``: k-NN preservation fractions, distance correlation
-            - ``alignment``: Centroid distance, Levene statistic (each with
-              'before' and 'after' values)
+    if not isinstance(X, pd.DataFrame):
+        X = pd.DataFrame(X)
 
-        Raises
-        ------
-        ValueError
-            If the model is not fitted or if pca_components is invalid.
-        """
-        _valid_nn = {"auto", "ball_tree", "kd_tree", "brute"}
-        if nn_algorithm not in _valid_nn:
-            raise ValueError(f"nn_algorithm must be one of {_valid_nn}, got '{nn_algorithm}'")
+    idx = X.index
 
-        if not hasattr(self, "_model") or not hasattr(self._model, "_gamma_star"):
+    if batch is None:
+        batch_vec = _subset(combat.batch, idx)
+    else:
+        if isinstance(batch, pd.Series | pd.DataFrame):
+            batch_vec = batch.loc[idx] if hasattr(batch, "loc") else batch
+        elif isinstance(batch, np.ndarray):
+            batch_vec = pd.Series(batch, index=idx)
+        else:
+            batch_vec = pd.Series(batch, index=idx)
+
+    batch_labels = np.array(batch_vec)
+
+    X_before = X.values
+    X_after = combat.transform(X).values
+
+    n_samples, n_features = X_before.shape
+    if kbet_k0 is None:
+        kbet_k0 = max(10, int(0.10 * n_samples))
+    if k_neighbors is None:
+        k_neighbors = [5, 10, 50]
+
+    # Validate and apply PCA if requested
+    if pca_components is not None:
+        max_components = min(n_samples, n_features)
+        if pca_components >= max_components:
             raise ValueError(
-                "This ComBat instance is not fitted yet. Call 'fit' before 'compute_batch_metrics'."
+                f"pca_components={pca_components} must be less than "
+                f"min(n_samples, n_features)={max_components}."
             )
+        X_before_pca, X_after_pca, _ = _compute_pca_embedding(X_before, X_after, pca_components)
+    else:
+        X_before_pca = X_before
+        X_after_pca = X_after
 
-        if not isinstance(X, pd.DataFrame):
-            X = pd.DataFrame(X)
+    batch_effect = _compute_batch_effect_metrics(
+        X_before_pca,
+        X_after_pca,
+        batch_labels,
+        kbet_k0=kbet_k0,
+        lisi_perplexity=lisi_perplexity,
+        nn_algorithm=nn_algorithm,
+    )
+    preservation = _compute_preservation_metrics(
+        X_before_pca,
+        X_after_pca,
+        k_neighbors,
+        n_jobs,
+        nn_algorithm=nn_algorithm,
+    )
+    alignment = _compute_alignment_metrics(
+        X_before,
+        X_after,
+        X_before_pca,
+        X_after_pca,
+        batch_labels,
+    )
 
-        idx = X.index
-
-        if batch is None:
-            batch_vec = self._subset(self.batch, idx)  # type: ignore[attr-defined]
-        else:
-            if isinstance(batch, pd.Series | pd.DataFrame):
-                batch_vec = batch.loc[idx] if hasattr(batch, "loc") else batch
-            elif isinstance(batch, np.ndarray):
-                batch_vec = pd.Series(batch, index=idx)
-            else:
-                batch_vec = pd.Series(batch, index=idx)
-
-        batch_labels = np.array(batch_vec)
-
-        X_before = X.values
-        X_after = self.transform(X).values  # type: ignore[attr-defined]
-
-        n_samples, n_features = X_before.shape
-        if kbet_k0 is None:
-            kbet_k0 = max(10, int(0.10 * n_samples))
-        if k_neighbors is None:
-            k_neighbors = [5, 10, 50]
-
-        # Validate and apply PCA if requested
-        if pca_components is not None:
-            max_components = min(n_samples, n_features)
-            if pca_components >= max_components:
-                raise ValueError(
-                    f"pca_components={pca_components} must be less than "
-                    f"min(n_samples, n_features)={max_components}."
-                )
-            X_before_pca, X_after_pca, _ = _compute_pca_embedding(X_before, X_after, pca_components)
-        else:
-            X_before_pca = X_before
-            X_after_pca = X_after
-
-        batch_effect = _compute_batch_effect_metrics(
-            X_before_pca,
-            X_after_pca,
-            batch_labels,
-            kbet_k0=kbet_k0,
-            lisi_perplexity=lisi_perplexity,
-            nn_algorithm=nn_algorithm,
-        )
-        preservation = _compute_preservation_metrics(
-            X_before_pca,
-            X_after_pca,
-            k_neighbors,
-            n_jobs,
-            nn_algorithm=nn_algorithm,
-        )
-        alignment = _compute_alignment_metrics(
-            X_before,
-            X_after,
-            X_before_pca,
-            X_after_pca,
-            batch_labels,
-        )
-
-        return {
-            "batch_effect": batch_effect,
-            "preservation": preservation,
-            "alignment": alignment,
-        }
-
-    def feature_batch_importance(
-        self,
-        mode: Literal["magnitude", "distribution"] = "magnitude",
-    ) -> pd.DataFrame:
-        """Compute per-feature batch effect magnitude.
-
-        Returns a DataFrame with columns ``location``, ``scale``, and
-        ``combined``. Location is the RMS of gamma across batches
-        (standardized mean shifts). Scale is the RMS of log-delta across
-        batches (log-fold variance change). Combined is the Euclidean norm
-        sqrt(location**2 + scale**2). Using RMS provides L2-consistent
-        aggregation; using log(delta) ensures symmetry.
-
-        Parameters
-        ----------
-        mode : {'magnitude', 'distribution'}, default='magnitude'
-            - 'magnitude': Returns L2-consistent absolute batch effect magnitudes.
-              Suitable for ranking, thresholding, and cross-dataset comparison.
-            - 'distribution': Returns column-wise normalized proportions (each column
-              sums to 1, values in range [0, 1]), representing the relative contribution
-              of each feature to the total location, scale, or combined batch effect.
-              Note: normalization is applied independently to each column, so the
-              Euclidean relationship (combined**2 = location**2 + scale**2) no longer holds.
-
-        Returns
-        -------
-        pd.DataFrame
-            DataFrame with index=feature names, columns=['location', 'scale', 'combined'],
-            sorted by 'combined' descending.
-
-        Raises
-        ------
-        ValueError
-            If the model is not fitted or if mode is invalid.
-        """
-        if not hasattr(self, "_model") or not hasattr(self._model, "_gamma_star"):
-            raise ValueError(
-                "This ComBat instance is not fitted yet. "
-                "Call 'fit' before 'feature_batch_importance'."
-            )
-
-        if mode not in ["magnitude", "distribution"]:
-            raise ValueError(f"mode must be 'magnitude' or 'distribution', got '{mode}'")
-
-        feature_names = self._model._grand_mean.index
-        gamma_star = self._model._gamma_star
-        delta_star = self._model._delta_star
-
-        # Location effect: RMS of gamma across batches (L2 aggregation)
-        location = np.sqrt((gamma_star**2).mean(axis=0))
-
-        # Scale effect: RMS of log(delta) across batches
-        if not self.mean_only:  # type: ignore[attr-defined]
-            scale = np.sqrt((np.log(delta_star) ** 2).mean(axis=0))
-        else:
-            scale = np.zeros_like(location)
-
-        # Euclidean to treat location and scale as orthogonal dimensions
-        combined = np.sqrt(location**2 + scale**2)
-
-        if mode == "distribution":
-            # Normalize each column independently to sum to 1
-            location_sum = location.sum()
-            scale_sum = scale.sum()
-            combined_sum = combined.sum()
-
-            location = location / location_sum if location_sum > 0 else location
-            scale = scale / scale_sum if scale_sum > 0 else scale
-            combined = combined / combined_sum if combined_sum > 0 else combined
-
-        return pd.DataFrame(
-            {
-                "location": location,
-                "scale": scale,
-                "combined": combined,
-            },
-            index=feature_names,
-        ).sort_values("combined", ascending=False)
+    return {
+        "batch_effect": batch_effect,
+        "preservation": preservation,
+        "alignment": alignment,
+    }

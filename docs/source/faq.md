@@ -70,7 +70,7 @@ However, ComBat **cannot** handle batches that were not seen during fitting. If 
 
 ## How do I interpret the `summary()` output?
 
-After fitting, call `combat.summary()` for a diagnostic report. Key sections:
+After fitting, call `summary(combat)` (from `combatlearn.inspection`) for a diagnostic report. Key sections:
 
 - **Method/Parametric/Mean only**: Confirms your configuration.
 - **Samples per batch**: Check for small or imbalanced batches.
