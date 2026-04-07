@@ -56,8 +56,7 @@ def feature_batch_diagnostics(
     """
     if not hasattr(combat, "_model") or not hasattr(combat._model, "_gamma_star"):
         raise ValueError(
-            "This ComBat instance is not fitted yet. "
-            "Call 'fit' before 'feature_batch_diagnostics'."
+            "This ComBat instance is not fitted yet. Call 'fit' before 'feature_batch_diagnostics'."
         )
 
     if mode not in ["magnitude", "distribution"]:

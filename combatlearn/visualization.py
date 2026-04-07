@@ -446,8 +446,7 @@ def plot_feature_diagnostics(
 
     if not hasattr(combat, "_model") or not hasattr(combat._model, "_gamma_star"):
         raise ValueError(
-            "This ComBat instance is not fitted yet. "
-            "Call 'fit' before 'plot_feature_diagnostics'."
+            "This ComBat instance is not fitted yet. Call 'fit' before 'plot_feature_diagnostics'."
         )
 
     if kind not in ["location", "scale", "combined"]:
@@ -579,8 +578,7 @@ def plot_batch_effect_heatmap(
 
     if not hasattr(combat, "_model") or not hasattr(combat._model, "_gamma_star"):
         raise ValueError(
-            "This ComBat instance is not fitted yet. "
-            "Call 'fit' before 'plot_batch_effect_heatmap'."
+            "This ComBat instance is not fitted yet. Call 'fit' before 'plot_batch_effect_heatmap'."
         )
 
     feature_names = combat._model._grand_mean.index
