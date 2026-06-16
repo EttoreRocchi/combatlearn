@@ -3,6 +3,12 @@
 All notable changes to combatlearn are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.1.0] - 2026-06-16
+
+### Added
+
+- **Longitudinal ComBat** (`method="longitudinal"`) for repeated-measures designs. The fixed-effects mean model is fit with a per-subject random intercept (REML) and the random-intercept BLUP is included in the standardization, after which the standard empirical-Bayes harmonization is applied. New `subject_id` (required) and `time_covariate` parameters on `ComBat` / `ComBatModel`.
+
 ## [2.0.0] - 2026-04-07
 
 First changelog-tracked release of combatlearn.

@@ -1,9 +1,10 @@
 """ComBat algorithm core.
 
-`ComBatModel` implements three variants of the ComBat algorithm:
+`ComBatModel` implements four variants of the ComBat algorithm:
     * Johnson et al. (2007) vanilla ComBat (method="johnson")
     * Fortin et al. (2018) extension with covariates (method="fortin")
     * Chen et al. (2022) CovBat (method="chen")
+    * Beer et al. (2020) Longitudinal ComBat (method="longitudinal")
 """
 
 from __future__ import annotations
@@ -17,6 +18,8 @@ import numpy.typing as npt
 import pandas as pd
 from sklearn.decomposition import PCA
 
+from ._mixed import fit_random_intercept
+
 ArrayLike: TypeAlias = pd.DataFrame | pd.Series | npt.NDArray[Any]
 FloatArray: TypeAlias = npt.NDArray[np.float64]
 
@@ -26,10 +29,12 @@ class ComBatModel:
 
     Parameters
     ----------
-    method : {'johnson', 'fortin', 'chen'}, default='johnson'
+    method : {'johnson', 'fortin', 'chen', 'longitudinal'}, default='johnson'
         * 'johnson' - classic ComBat.
         * 'fortin' - covariate-aware ComBat.
         * 'chen' - CovBat, PCA-based ComBat.
+        * 'longitudinal' - Longitudinal ComBat; requires a per-sample
+          ``subject_id`` for the random intercept.
     parametric : bool, default=True
         Use the parametric empirical Bayes variant.
     mean_only : bool, default=False
@@ -47,7 +52,7 @@ class ComBatModel:
     def __init__(
         self,
         *,
-        method: Literal["johnson", "fortin", "chen"] = "johnson",
+        method: Literal["johnson", "fortin", "chen", "longitudinal"] = "johnson",
         parametric: bool = True,
         mean_only: bool = False,
         reference_batch: str | None = None,
@@ -77,6 +82,8 @@ class ComBatModel:
         self._batch_levels_pc: pd.Index
         self._pc_gamma_star: FloatArray
         self._pc_delta_star: FloatArray
+        self._re_subject_levels: pd.Index
+        self._re_blup: FloatArray
 
         # Validate covbat_cov_thresh
         if isinstance(self.covbat_cov_thresh, float):
@@ -138,6 +145,8 @@ class ComBatModel:
         batch: ArrayLike,
         discrete_covariates: ArrayLike | None = None,
         continuous_covariates: ArrayLike | None = None,
+        subject_id: ArrayLike | None = None,
+        time_covariate: ArrayLike | None = None,
     ) -> ComBatModel:
         """Fit the ComBat model.
 
@@ -150,9 +159,15 @@ class ComBatModel:
         batch : array-like of shape (n_samples,)
             Batch labels for each sample.
         discrete_covariates : array-like or None, default=None
-            Categorical covariates to protect (Fortin/Chen only).
+            Categorical covariates to protect (Fortin/Chen/Longitudinal only).
         continuous_covariates : array-like or None, default=None
-            Continuous covariates to protect (Fortin/Chen only).
+            Continuous covariates to protect (Fortin/Chen/Longitudinal only).
+        subject_id : array-like or None, default=None
+            Subject/individual labels for the random intercept. Required for
+            ``method='longitudinal'``, ignored otherwise.
+        time_covariate : array-like or None, default=None
+            Continuous time variable for repeated measures (Longitudinal only).
+            Added to the fixed-effects design alongside ``continuous_covariates``.
 
         Returns
         -------
@@ -160,10 +175,10 @@ class ComBatModel:
             Fitted model.
         """
         method = self.method.lower()
-        if method not in {"johnson", "fortin", "chen"}:
+        if method not in {"johnson", "fortin", "chen", "longitudinal"}:
             raise ValueError(
                 f"method={self.method!r} is not recognized. "
-                f"Expected one of 'johnson', 'fortin', or 'chen'."
+                f"Expected one of 'johnson', 'fortin', 'chen', or 'longitudinal'."
             )
         if not isinstance(X, pd.DataFrame):
             X = pd.DataFrame(X)
@@ -180,6 +195,13 @@ class ComBatModel:
                 f"Check for typos or trailing whitespace in batch labels."
             )
 
+        if method != "longitudinal" and (subject_id is not None or time_covariate is not None):
+            warnings.warn(
+                "`subject_id` and `time_covariate` are only used when "
+                "method='longitudinal'; they are ignored here.",
+                stacklevel=2,
+            )
+
         if method == "johnson":
             if disc is not None or cont is not None:
                 warnings.warn("Covariates are ignored when using method='johnson'.", stacklevel=2)
@@ -188,6 +210,8 @@ class ComBatModel:
             self._fit_fortin(X, batch, disc, cont)
         elif method == "chen":
             self._fit_chen(X, batch, disc, cont)
+        elif method == "longitudinal":
+            self._fit_longitudinal(X, batch, disc, cont, subject_id, time_covariate)
         return self
 
     def _fit_johnson(self, X: pd.DataFrame, batch: pd.Series) -> None:
@@ -431,6 +455,153 @@ class ComBatModel:
         self._pc_gamma_star = gamma_star
         self._pc_delta_star = delta_star
 
+    def _build_longitudinal_design(
+        self,
+        X: pd.DataFrame,
+        batch: pd.Series,
+        disc: pd.DataFrame | None,
+        cont: pd.DataFrame | None,
+        time: pd.DataFrame | None,
+    ) -> tuple[FloatArray, list[str]]:
+        """Assemble the fixed-effects design [batch dummies | covariates | time].
+
+        Returns the design matrix and the list of non-batch column names.
+        """
+        batch_dummies = pd.get_dummies(batch, drop_first=False).astype(float)
+        batch_dummies = batch_dummies.reindex(columns=self._batch_levels, fill_value=0.0)
+
+        nonbatch_parts: list[pd.DataFrame] = []
+        if disc is not None:
+            nonbatch_parts.append(
+                pd.get_dummies(disc.astype("category"), drop_first=True).astype(float)
+            )
+        if cont is not None:
+            nonbatch_parts.append(cont.astype(float))
+        if time is not None:
+            nonbatch_parts.append(time.astype(float))
+
+        if nonbatch_parts:
+            nonbatch_df = pd.concat(nonbatch_parts, axis=1)
+        else:
+            nonbatch_df = pd.DataFrame(index=batch_dummies.index)
+
+        design_df = pd.concat([batch_dummies, nonbatch_df], axis=1)
+        n_batch = len(self._batch_levels)
+        nonbatch_columns = design_df.columns[n_batch:].tolist()
+        return design_df.values.astype(np.float64), nonbatch_columns
+
+    def _fit_longitudinal(
+        self,
+        X: pd.DataFrame,
+        batch: pd.Series,
+        disc: pd.DataFrame | None,
+        cont: pd.DataFrame | None,
+        subject_id: ArrayLike | None,
+        time_covariate: ArrayLike | None,
+    ) -> None:
+        """Longitudinal ComBat (*Beer et al.* 2020).
+
+        Identical to Fortin's standardize -> per-batch gamma/delta -> empirical
+        Bayes -> remove pipeline, except the fixed-effects mean model is fit with
+        a per-subject random intercept (REML), and the random-intercept BLUP is
+        included in the standardization mean.
+        """
+        if subject_id is None:
+            raise ValueError(
+                "method='longitudinal' requires `subject_id` (one label per sample "
+                "identifying the subject/individual used for the random intercept)."
+            )
+
+        self._batch_levels = batch.cat.categories
+        n_batch = len(self._batch_levels)
+        n_samples = len(X)
+
+        counts = batch.value_counts()
+        small = counts[counts < 2]
+        if len(small):
+            lvl = small.index[0]
+            raise ValueError(
+                f"Batch '{lvl}' has only {int(small.iloc[0])} sample(s). ComBat requires "
+                f">= 2 samples per batch. Consider merging small batches or removing them."
+            )
+
+        time = self._to_df(time_covariate, X.index, "time_covariate")
+        design, self._nonbatch_columns = self._build_longitudinal_design(X, batch, disc, cont, time)
+        self._design_cond = float(la.cond(design)) if design.shape[1] else 1.0
+        self._n_batch = n_batch
+        self._p_design = design.shape[1]
+
+        subj = self._as_series(subject_id, X.index, "subject_id")
+        self._re_subject_levels = subj.cat.categories
+        group_idx = subj.cat.codes.to_numpy().astype(np.intp)
+        n_groups = len(self._re_subject_levels)
+        n_k = np.bincount(group_idx, minlength=n_groups).astype(np.float64)
+
+        beta, blup, sigma2, _ = fit_random_intercept(
+            design, X.values.astype(np.float64), group_idx, n_groups, n_k, eps=self.eps
+        )
+        self._re_blup = blup
+
+        beta_batch = beta[:n_batch]
+        self._beta_hat_nonbatch = beta[n_batch:]
+
+        n_per_batch_arr = np.asarray(
+            batch.value_counts().reindex(self._batch_levels).astype(int).values, dtype=np.float64
+        )
+        self._n_per_batch = dict(zip(self._batch_levels, n_per_batch_arr.astype(int), strict=True))
+
+        grand_mean = (n_per_batch_arr / n_samples) @ beta_batch
+        self._grand_mean = pd.Series(grand_mean, index=X.columns)
+        var_pooled = sigma2 + self.eps
+        self._pooled_var = pd.Series(var_pooled, index=X.columns)
+
+        blup_per_row = blup[group_idx]
+        stand_mean = grand_mean + design[:, n_batch:] @ self._beta_hat_nonbatch + blup_per_row
+        Xs = (X.values - stand_mean) / np.sqrt(var_pooled)
+
+        gamma_hat = np.vstack(
+            [Xs[(batch == lvl).to_numpy()].mean(axis=0) for lvl in self._batch_levels]
+        )
+        delta_hat = np.vstack(
+            [
+                Xs[(batch == lvl).to_numpy()].var(axis=0, ddof=1) + self.eps
+                for lvl in self._batch_levels
+            ]
+        )
+
+        b_names = [str(lvl) for lvl in self._batch_levels]
+        if self.mean_only:
+            gamma_star = self._shrink_gamma(
+                gamma_hat,
+                delta_hat,
+                n_per_batch_arr,
+                parametric=self.parametric,
+                batch_names=b_names,
+            )
+            delta_star = np.ones_like(delta_hat)
+        else:
+            gamma_star, delta_star = self._shrink_gamma_delta(
+                gamma_hat,
+                delta_hat,
+                n_per_batch_arr,
+                parametric=self.parametric,
+                batch_names=b_names,
+            )
+
+        if self.reference_batch is not None:
+            ref_idx = list(self._batch_levels).index(self.reference_batch)
+            gamma_ref = gamma_star[ref_idx]
+            delta_ref = delta_star[ref_idx]
+            gamma_star = gamma_star - gamma_ref
+            if not self.mean_only:
+                delta_star = delta_star / delta_ref
+            self._reference_batch_idx = ref_idx
+        else:
+            self._reference_batch_idx = None
+
+        self._gamma_star = gamma_star
+        self._delta_star = delta_star
+
     def _shrink_gamma_delta(
         self,
         gamma_hat: FloatArray,
@@ -620,6 +791,8 @@ class ComBatModel:
         batch: ArrayLike,
         discrete_covariates: ArrayLike | None = None,
         continuous_covariates: ArrayLike | None = None,
+        subject_id: ArrayLike | None = None,
+        time_covariate: ArrayLike | None = None,
     ) -> pd.DataFrame:
         """Transform the data using fitted ComBat parameters.
 
@@ -630,9 +803,14 @@ class ComBatModel:
         batch : array-like of shape (n_samples,)
             Batch labels for each sample.
         discrete_covariates : array-like or None, default=None
-            Categorical covariates (Fortin/Chen only).
+            Categorical covariates (Fortin/Chen/Longitudinal only).
         continuous_covariates : array-like or None, default=None
-            Continuous covariates (Fortin/Chen only).
+            Continuous covariates (Fortin/Chen/Longitudinal only).
+        subject_id : array-like or None, default=None
+            Subject labels for the random intercept (Longitudinal only). Unseen
+            subjects fall back to a zero random intercept.
+        time_covariate : array-like or None, default=None
+            Continuous time variable (Longitudinal only).
 
         Returns
         -------
@@ -665,9 +843,12 @@ class ComBatModel:
             return self._transform_fortin(X, batch, disc, cont)
         elif method == "chen":
             return self._transform_chen(X, batch, disc, cont)
+        elif method == "longitudinal":
+            return self._transform_longitudinal(X, batch, disc, cont, subject_id, time_covariate)
         else:
             raise ValueError(
-                f"Unknown method={method!r}. Expected one of 'johnson', 'fortin', or 'chen'."
+                f"Unknown method={method!r}. Expected one of 'johnson', 'fortin', "
+                f"'chen', or 'longitudinal'."
             )
 
     def _transform_johnson(self, X: pd.DataFrame, batch: pd.Series) -> pd.DataFrame:
@@ -773,3 +954,55 @@ class ComBatModel:
 
         X_recon = self._covbat_pca.inverse_transform(scores_adj)
         return pd.DataFrame(X_recon, index=X.index, columns=X.columns)
+
+    def _transform_longitudinal(
+        self,
+        X: pd.DataFrame,
+        batch: pd.Series,
+        disc: pd.DataFrame | None,
+        cont: pd.DataFrame | None,
+        subject_id: ArrayLike | None,
+        time_covariate: ArrayLike | None,
+    ) -> pd.DataFrame:
+        """Longitudinal transform implementation."""
+        if subject_id is None:
+            raise ValueError("method='longitudinal' requires `subject_id` at transform time.")
+
+        n_features = len(self._grand_mean)
+        time = self._to_df(time_covariate, X.index, "time_covariate")
+        design, nonbatch_columns = self._build_longitudinal_design(X, batch, disc, cont, time)
+        # Realign non-batch columns to those seen at fit (handles unseen covariate levels).
+        nonbatch_design = pd.DataFrame(
+            design[:, self._n_batch :],
+            index=X.index,
+            columns=nonbatch_columns,
+        ).reindex(columns=self._nonbatch_columns, fill_value=0.0)
+
+        subj = self._as_series(subject_id, X.index, "subject_id")
+        level_pos = {lvl: i for i, lvl in enumerate(self._re_subject_levels)}
+        codes = np.array([level_pos.get(s, -1) for s in subj.to_numpy()], dtype=np.intp)
+        blup_per_row = np.zeros((len(X.index), n_features), dtype=np.float64)
+        seen = codes >= 0
+        if seen.any():
+            blup_per_row[seen] = self._re_blup[codes[seen]]
+
+        grand_vals = np.asarray(self._grand_mean.values, dtype=np.float64)
+        pooled_vals = np.asarray(self._pooled_var.values, dtype=np.float64)
+        stand_mean = grand_vals + nonbatch_design.values @ self._beta_hat_nonbatch + blup_per_row
+        Xs = (X.values - stand_mean) / np.sqrt(pooled_vals)
+
+        for i, lvl in enumerate(self._batch_levels):
+            idx = (batch == lvl).to_numpy()
+            if not idx.any():
+                continue
+            if self.reference_batch is not None and lvl == self.reference_batch:
+                continue
+            g = self._gamma_star[i]
+            d = self._delta_star[i]
+            if self.mean_only:
+                Xs[idx] = Xs[idx] - g
+            else:
+                Xs[idx] = (Xs[idx] - g) / np.sqrt(d)
+
+        X_adj = Xs * np.sqrt(pooled_vals) + stand_mean
+        return pd.DataFrame(X_adj, index=X.index, columns=X.columns, dtype=float)

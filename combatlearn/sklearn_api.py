@@ -27,10 +27,15 @@ class ComBat(BaseEstimator, TransformerMixin):  # type: ignore[misc]
     batch : array-like of shape (n_samples,)
         Batch labels for each sample.
     discrete_covariates : array-like, optional
-        Categorical covariates to protect (Fortin/Chen only).
+        Categorical covariates to protect (Fortin/Chen/Longitudinal only).
     continuous_covariates : array-like, optional
-        Continuous covariates to protect (Fortin/Chen only).
-    method : {'johnson', 'fortin', 'chen'}, default='johnson'
+        Continuous covariates to protect (Fortin/Chen/Longitudinal only).
+    subject_id : array-like, optional
+        Subject/individual labels for the random intercept. Required for
+        ``method='longitudinal'``, ignored otherwise.
+    time_covariate : array-like, optional
+        Continuous time variable for repeated measures (Longitudinal only).
+    method : {'johnson', 'fortin', 'chen', 'longitudinal'}, default='johnson'
         ComBat variant to use.
     parametric : bool, default=True
         Use parametric empirical Bayes.
@@ -53,6 +58,8 @@ class ComBat(BaseEstimator, TransformerMixin):  # type: ignore[misc]
         *,
         discrete_covariates: ArrayLike | None = None,
         continuous_covariates: ArrayLike | None = None,
+        subject_id: ArrayLike | None = None,
+        time_covariate: ArrayLike | None = None,
         method: str = "johnson",
         parametric: bool = True,
         mean_only: bool = False,
@@ -63,6 +70,8 @@ class ComBat(BaseEstimator, TransformerMixin):  # type: ignore[misc]
         self.batch = batch
         self.discrete_covariates = discrete_covariates
         self.continuous_covariates = continuous_covariates
+        self.subject_id = subject_id
+        self.time_covariate = time_covariate
         self.method = method
         self.parametric = parametric
         self.mean_only = mean_only
@@ -84,6 +93,19 @@ class ComBat(BaseEstimator, TransformerMixin):  # type: ignore[misc]
                     f"batch contains {nan_count} NaN value(s). "
                     f"All batch labels must be non-null. Check your data for missing entries."
                 )
+
+            if self.subject_id is not None:
+                subj_ser = (
+                    pd.Series(self.subject_id)
+                    if not isinstance(self.subject_id, pd.Series)
+                    else self.subject_id
+                )
+                nan_count = int(subj_ser.isna().sum())
+                if nan_count:
+                    raise ValueError(
+                        f"subject_id contains {nan_count} NaN value(s). "
+                        f"All subject labels must be non-null."
+                    )
 
             if self.discrete_covariates is not None:
                 disc_df = (
@@ -118,6 +140,7 @@ class ComBat(BaseEstimator, TransformerMixin):  # type: ignore[misc]
         batch_ser: pd.Series,
         disc: pd.DataFrame | pd.Series | None,
         cont: pd.DataFrame | pd.Series | None,
+        time: pd.DataFrame | pd.Series | None = None,
     ) -> None:
         """Issue warnings for data quality issues that may affect results."""
         # Near-zero variance features
@@ -148,8 +171,10 @@ class ComBat(BaseEstimator, TransformerMixin):  # type: ignore[misc]
                 stacklevel=3,
             )
 
-        # Covariate collinearity with batch (fortin/chen only)
-        if self.method.lower() in {"fortin", "chen"} and (disc is not None or cont is not None):
+        # Covariate collinearity with batch (fortin/chen/longitudinal only)
+        if self.method.lower() in {"fortin", "chen", "longitudinal"} and (
+            disc is not None or cont is not None or time is not None
+        ):
             batch_dummies = pd.get_dummies(batch_ser, drop_first=True).astype(float)
             cov_parts: list[pd.DataFrame] = []
             if disc is not None:
@@ -160,6 +185,9 @@ class ComBat(BaseEstimator, TransformerMixin):  # type: ignore[misc]
             if cont is not None:
                 c = cont if isinstance(cont, pd.DataFrame) else cont.to_frame()
                 cov_parts.append(c.astype(float))
+            if time is not None:
+                t = time if isinstance(time, pd.DataFrame) else time.to_frame()
+                cov_parts.append(t.astype(float))
             cov_df = pd.concat(cov_parts, axis=1)
             design = pd.concat([batch_dummies, cov_df], axis=1)
             rank = la.matrix_rank(design.values)
@@ -227,14 +255,18 @@ class ComBat(BaseEstimator, TransformerMixin):  # type: ignore[misc]
         batch_vec = _subset(self.batch, idx)
         disc = _subset(self.discrete_covariates, idx)
         cont = _subset(self.continuous_covariates, idx)
+        subj = _subset(self.subject_id, idx)
+        time = _subset(self.time_covariate, idx)
 
-        self._check_data_quality(X_df, batch_vec, disc, cont)  # type: ignore[arg-type]
+        self._check_data_quality(X_df, batch_vec, disc, cont, time)  # type: ignore[arg-type]
 
         self._model.fit(
             X,
             batch=batch_vec,  # type: ignore[arg-type]
             discrete_covariates=disc,
             continuous_covariates=cont,
+            subject_id=subj,
+            time_covariate=time,
         )
         self._fitted_batch = batch_vec
 
@@ -261,11 +293,15 @@ class ComBat(BaseEstimator, TransformerMixin):  # type: ignore[misc]
         batch_vec = _subset(self.batch, idx)
         disc = _subset(self.discrete_covariates, idx)
         cont = _subset(self.continuous_covariates, idx)
+        subj = _subset(self.subject_id, idx)
+        time = _subset(self.time_covariate, idx)
         X_transformed = self._model.transform(
             X,
             batch=batch_vec,  # type: ignore[arg-type]
             discrete_covariates=disc,
             continuous_covariates=cont,
+            subject_id=subj,
+            time_covariate=time,
         )
 
         batch_arr = np.asarray(batch_vec)

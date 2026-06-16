@@ -1,6 +1,6 @@
 # Method Guide
 
-combatlearn implements three variants of the ComBat algorithm. This guide helps you choose the right method for your use case.
+combatlearn implements four variants of the ComBat algorithm. This guide helps you choose the right method for your use case.
 
 ## Johnson Method (Classic ComBat)
 
@@ -158,6 +158,61 @@ covbat_cov_thresh=50  # Use exactly 50 components
 ❌ Most computationally intensive
 ❌ Information loss in PCA step
 
+## Longitudinal Method (Longitudinal ComBat)
+
+**Reference**: Beer et al. (2020)
+
+ComBat for repeated-measures / longitudinal designs, where the same subjects are measured more than once (e.g. across visits or time points). It extends the Fortin model with a per-subject **random intercept** - a subject-specific offset shared across that subject's repeated measurements - so within-subject correlation is accounted for when estimating batch effects rather than being treated as independent noise.
+
+As in the other methods, `batch` is still the technical batch you want to remove (e.g. scanner or site); what makes a design *longitudinal* is that the same subjects recur, identified by `subject_id`.
+
+### When to Use
+
+- Harmonising a complete repeated-measures cohort in one pass (`fit_transform`) for downstream analysis - the primary use case
+- Subjects measured at multiple time points, or across multiple batches
+- Repeated-measures / panel / multi-visit designs
+- You want within-subject correlation modeled rather than ignored
+
+### Algorithm
+
+1. Fit the fixed-effects mean model (grand mean + covariates + batch) with a per-subject random intercept, estimated by REML
+2. Standardize using the covariate fit plus each subject's estimated random intercept (BLUP)
+3. Estimate location (γ) and scale (δ) parameters per batch and apply empirical Bayes shrinkage
+4. Remove batch effects, leaving subject and covariate structure intact
+
+### Example
+
+```python
+from combatlearn import ComBat
+
+combat = ComBat(
+    batch=batch,
+    method="longitudinal",
+    subject_id=subject,         # required: one label per sample
+    time_covariate=time,        # optional: continuous time variable
+    continuous_covariates=age,  # optional
+    discrete_covariates=sex,    # optional
+)
+X_corrected = combat.fit_transform(X)
+```
+
+### Advantages
+
+✅ Accounts for within-subject correlation (repeated measures)
+✅ Preserves covariate effects (like Fortin)
+✅ Same scikit-learn `fit`/`transform` contract; supports parametric and non-parametric EB, `mean_only`, and `reference_batch`
+
+### Limitations
+
+❌ Requires a `subject_id` for every sample
+❌ Subjects unseen at fit are corrected with a zero random intercept (i.e. the population mean)
+
+### In-sample harmonization vs. new-subject prediction
+
+Longitudinal ComBat's advantage - separating within- from between-subject variance and modelling each subject's own intercept - is realised **in-sample**, while a subject is present at fit time. Its intended use is **transductive harmonization of a complete repeated-measures cohort**: call `fit_transform(X)` on the whole dataset so every subject gets its random intercept, then run your downstream (typically group-level) analysis on the harmonised data.
+
+For a subject **unseen at fit** - which is every test subject under correct subject-grouped cross-validation (`GroupKFold` on `subject_id`) - the random intercept is zero by construction, so the correction reduces toward Fortin, but with scale parameters calibrated on subject-centred residuals applied to data that still carries the between-subject spread. In that setting it offers little over Fortin and can even harmonise slightly worse. **For cross-validated prediction that must generalise to new subjects, prefer `method="fortin"`; reserve `method="longitudinal"` for harmonising a full repeated-measures dataset for downstream analysis.**
+
 ## Parametric vs Non-Parametric
 
 All methods support both parametric and non-parametric empirical Bayes:
@@ -212,9 +267,10 @@ Samples in the reference batch remain unchanged after correction.
 
 **Simple Decision Tree**:
 
-1. **No covariates?** → Use Johnson
-2. **Have covariates + low/normal dimensionality?** → Use Fortin
-3. **Have covariates + high dimensionality?** → Use Chen
+1. **Harmonising a complete repeated-measures cohort in-sample?** → Use Longitudinal (for cross-validated prediction on *new* subjects, use Fortin)
+2. **No covariates?** → Use Johnson
+3. **Have covariates + low/normal dimensionality?** → Use Fortin
+4. **Have covariates + high dimensionality?** → Use Chen
 
 ## Next Steps
 

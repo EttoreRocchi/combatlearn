@@ -12,10 +12,11 @@
 
 **combatlearn** makes the popular _ComBat_ (and _CovBat_) batch-effect correction algorithm available for use into machine learning frameworks. It lets you harmonise high-dimensional data inside a scikit-learn `Pipeline`, so that cross-validation and grid-search automatically take batch structure into account, **without data leakage**.
 
-**Three methods**:
+**Four methods**:
 - `method="johnson"` - classic ComBat (Johnson _et al._, 2007)
 - `method="fortin"` - neuroComBat (Fortin _et al._, 2018)
 - `method="chen"` - CovBat (Chen _et al._, 2022)
+- `method="longitudinal"` - Longitudinal ComBat for repeated measures (Beer _et al._, 2020)
 
 ## Installation
 
@@ -38,6 +39,7 @@ import pandas as pd
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import GridSearchCV
 from combatlearn import ComBat
 
 df = pd.read_csv("data.csv", index_col=0)
@@ -88,18 +90,20 @@ The following section provides a detailed explanation of all parameters availabl
 | Parameter | Type | Default | Description |
 | --- | ---  | --- | --- |
 | `batch` | array-like or pd.Series | **required** | Vector indicating batch assignment for each sample. This is used to estimate and remove batch effects. |
-| `discrete_covariates` | array-like, pd.Series, or pd.DataFrame | `None` | Optional categorical covariates (e.g., sex, site). Only used in `"fortin"` and `"chen"` methods. |
-| `continuous_covariates` | array-like, pd.Series or pd.DataFrame | `None` | Optional continuous covariates (e.g., age). Only used in `"fortin"` and `"chen"` methods. |
+| `discrete_covariates` | array-like, pd.Series, or pd.DataFrame | `None` | Optional categorical covariates (e.g., sex, site). Only used in `"fortin"`, `"chen"`, and `"longitudinal"` methods. |
+| `continuous_covariates` | array-like, pd.Series or pd.DataFrame | `None` | Optional continuous covariates (e.g., age). Only used in `"fortin"`, `"chen"`, and `"longitudinal"` methods. |
+| `subject_id` | array-like or pd.Series | `None` | Subject/individual labels for the random intercept. **Required** for `method="longitudinal"`, ignored otherwise. |
+| `time_covariate` | array-like or pd.Series | `None` | Optional continuous time variable for repeated measures. Only used in `"longitudinal"`. |
 
 ### Algorithm Options
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
-| `method` | str | `"johnson"` | ComBat method to use: <ul><li>`"johnson"` - Classical ComBat (_Johnson et al. 2007_)</li><li>`"fortin"` - ComBat with covariates (_Fortin et al. 2018_)</li><li>`"chen"` - CovBat, PCA-based correction (_Chen et al. 2022_)</li></ul> |
+| `method` | str | `"johnson"` | ComBat method to use: <ul><li>`"johnson"` - Classical ComBat (_Johnson et al. 2007_)</li><li>`"fortin"` - ComBat with covariates (_Fortin et al. 2018_)</li><li>`"chen"` - CovBat, PCA-based correction (_Chen et al. 2022_)</li><li>`"longitudinal"` - Longitudinal ComBat with a per-subject random intercept (_Beer et al. 2020_)</li></ul> |
 | `parametric` | bool | `True` | Whether to use the **parametric empirical Bayes** formulation. If `False`, a non-parametric iterative scheme is used. |
 | `mean_only` | bool | `False` | If `True`, only the **mean** is corrected, while variances are left unchanged. Useful for preserving variance structure in the data. |
 | `reference_batch` | str or `None` | `None` | If specified, acts as a reference batch - other batches will be corrected to match this one. |
-| `covbat_cov_thresh` | float, int | `0.9` | For `"chen"` method only: Cumulative variance threshold $]0,1[$ to retain PCs in PCA space (e.g., 0.9 = retain 90% explained variance). If an integer is provided, it represents the number of principal components to use. |
+| `covbat_cov_thresh` | float, int | `0.9` | For `"chen"` method only: Cumulative variance threshold in `(0, 1]` to retain PCs in PCA space (e.g., 0.9 = retain 90% explained variance). If an integer is provided, it represents the number of principal components to use. |
 | `eps` | float | `1e-8` | Small jitter value added to variances to prevent divide-by-zero errors during standardization. |
 
 
@@ -153,3 +157,5 @@ Please consider citing the original papers:
 - [**neuroCombat**](https://github.com/Jfortin1/neuroCombat) - Fortin JP et al. _Neuroimage_. 2018. doi: [10.1016/j.neuroimage.2017.11.024](https://doi.org/10.1016/j.neuroimage.2017.11.024)
 
 - [**CovBat**](https://github.com/andy1764/CovBat_Harmonization) - Chen AA et al. _Hum Brain Mapp_. 2022. doi: [10.1002/hbm.25688](https://doi.org/10.1002/hbm.25688)
+
+- [**Longitudinal ComBat**](https://github.com/jcbeer/longCombat) - Beer JC et al. _Neuroimage_. 2020. doi: [10.1016/j.neuroimage.2020.117129](https://doi.org/10.1016/j.neuroimage.2020.117129)

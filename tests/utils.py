@@ -26,3 +26,37 @@ def simulate_covariate_data(random_state=0):
     X.loc[disc["diag"] == "diag_1"] += 1.5  # to add effect in diag
     X += (age[:, None] - age.mean()) * 0.04  # to add effect in age
     return X, batch, disc, cont
+
+
+def simulate_longitudinal_data(
+    n_subjects=40, n_times=3, n_features=20, shift=3.0, re_sd=1.5, random_state=0
+):
+    """Repeated-measures data where each subject is observed across batches over time.
+
+    Returns (X, batch, subject, time). Subjects carry a random intercept and span
+    multiple batches across their time points, which identifies the mixed model.
+    """
+    rng = np.random.default_rng(random_state)
+    n = n_subjects * n_times
+    batch_levels = ["A", "B", "C"]
+    shifts = {"A": shift, "B": -shift, "C": 0.3 * shift}
+
+    subject_re = rng.normal(0.0, re_sd, size=(n_subjects, n_features))
+    X = np.empty((n, n_features))
+    subjects, times, batches = [], [], []
+    row = 0
+    for s in range(n_subjects):
+        for t in range(n_times):
+            b = batch_levels[(s + t) % len(batch_levels)]
+            X[row] = rng.standard_normal(n_features) + subject_re[s] + shifts[b] + 0.5 * t
+            subjects.append(f"subj_{s}")
+            times.append(float(t))
+            batches.append(b)
+            row += 1
+
+    X = pd.DataFrame(X)
+    idx = X.index
+    batch = pd.Series(batches, index=idx, name="batch")
+    subject = pd.Series(subjects, index=idx, name="subject")
+    time = pd.Series(times, index=idx, name="time")
+    return X, batch, subject, time
