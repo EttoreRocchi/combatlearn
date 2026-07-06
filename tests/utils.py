@@ -2,6 +2,47 @@ import numpy as np
 import pandas as pd
 
 
+def simulate_gam_data(
+    n_samples=300,
+    n_features=12,
+    shift=3.0,
+    signal=4.0,
+    confound=True,
+    nonlinear=True,
+    random_state=0,
+):
+    """Data with an additive batch shift over a (non)linear continuous-covariate effect.
+
+    Returns ``(X, batch, cont, oracle)`` where ``oracle`` is the batch-free signal
+    (true covariate effect + noise) that a perfect harmonizer should recover.
+
+    When ``confound=True`` the batch label is assigned from age tertiles, so the
+    age-driven signal is collinear with batch. With ``nonlinear=True`` (a full-period
+    sinusoid) a linear covariate model (``fortin``) cannot separate the nonlinear age
+    effect from the batch effect, while a spline model (``gam``) can.
+    """
+    rng = np.random.default_rng(random_state)
+    age = rng.uniform(20, 80, n_samples)
+    if confound:
+        q = np.quantile(age, [1 / 3, 2 / 3])
+        batch_arr = np.where(age < q[0], "A", np.where(age < q[1], "B", "C"))
+    else:
+        batch_arr = rng.choice(["A", "B", "C"], n_samples)
+    curve = np.sin((age - 20) / 60 * 2 * np.pi) if nonlinear else (age - 50) / 30
+    loadings = rng.uniform(0.5, 1.5, n_features)
+    effect = signal * np.outer(curve, loadings)
+    noise = rng.standard_normal((n_samples, n_features))
+    shifts = {"A": shift, "B": -shift, "C": 0.3 * shift}
+    batch_shift = np.array([shifts[b] for b in batch_arr])[:, None]
+
+    X = pd.DataFrame(effect + noise + batch_shift)
+    idx = X.index
+    batch = pd.Series(batch_arr, index=idx, name="batch")
+    cont = pd.DataFrame({"age": age}, index=idx)
+    oracle = pd.DataFrame(effect + noise, index=idx)
+    return X, batch, cont, oracle
+
+
 def simulate_data(n_samples=150, n_features=25, shift=3.0, random_state=0):
     rng = np.random.default_rng(random_state)
     X = rng.standard_normal((n_samples, n_features))

@@ -475,3 +475,49 @@ def test_balanced_batches_no_imbalance_warning():
     with warnings.catch_warnings():
         warnings.simplefilter("error")
         ComBat(batch=batch).fit(X)
+
+
+@pytest.mark.parametrize(
+    "alias,canonical",
+    [("classic_combat", "johnson"), ("neurocombat", "fortin"), ("covbat", "chen")],
+)
+def test_method_alias_matches_canonical(alias, canonical):
+    """A literature alias must produce the same result as its canonical author name."""
+    if canonical == "johnson":
+        X, batch = simulate_data()
+        extra = {}
+    else:
+        X, batch, disc, cont = simulate_covariate_data()
+        extra = {"discrete_covariates": disc, "continuous_covariates": cont}
+    out_alias = ComBat(batch=batch, method=alias, **extra).fit_transform(X)
+    out_canon = ComBat(batch=batch, method=canonical, **extra).fit_transform(X)
+    np.testing.assert_allclose(out_alias.values, out_canon.values, rtol=1e-10, atol=1e-10)
+
+
+def test_method_alias_case_and_separator_insensitive():
+    """Alias matching ignores case, hyphens, underscores, and spaces."""
+    X, batch, disc, cont = simulate_covariate_data()
+    base = ComBat(
+        batch=batch, discrete_covariates=disc, continuous_covariates=cont, method="fortin"
+    ).fit_transform(X)
+    for name in ["neuroCombat", "neuro-combat", "NEUROCOMBAT", "neuro_combat"]:
+        out = ComBat(
+            batch=batch, discrete_covariates=disc, continuous_covariates=cont, method=name
+        ).fit_transform(X)
+        np.testing.assert_allclose(out.values, base.values, rtol=1e-10, atol=1e-10)
+
+
+def test_classic_combat_separator_variants():
+    """'classic_combat', 'classic-combat', 'ClassicComBat' all resolve to johnson."""
+    X, batch = simulate_data()
+    base = ComBat(batch=batch, method="johnson").fit_transform(X)
+    for name in ["classic_combat", "classic-combat", "ClassicComBat"]:
+        out = ComBat(batch=batch, method=name).fit_transform(X)
+        np.testing.assert_allclose(out.values, base.values, rtol=1e-10, atol=1e-10)
+
+
+def test_invalid_method_message_lists_aliases():
+    """The unrecognized-method error mentions the alias names."""
+    X, batch = simulate_data()
+    with pytest.raises(ValueError, match="classic_combat"):
+        ComBat(batch=batch, method="not_a_method").fit(X)

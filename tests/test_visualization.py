@@ -105,6 +105,41 @@ def test_plot_feature_diagnostics_kind_combined_grouped():
     assert legend is not None
 
 
+def test_plot_feature_diagnostics_combined_diverging():
+    """Test kind='combined' with layout='diverging' renders two side panels."""
+    X, batch = simulate_data(n_samples=100, n_features=25)
+    combat = ComBat(batch=batch, method="johnson").fit(X)
+
+    fig = plot_feature_diagnostics(combat, kind="combined", layout="diverging")
+    assert fig is not None
+
+    # Two panels: Location (x-axis inverted -> grows leftward) and Scale.
+    assert len(fig.axes) == 2
+    ax_loc, ax_scale = fig.axes
+    assert ax_loc.get_title() == "Location"
+    assert ax_scale.get_title() == "Scale"
+    lo, hi = ax_loc.get_xlim()
+    assert lo > hi  # inverted axis
+
+
+def test_plot_feature_diagnostics_diverging_requires_combined():
+    """layout='diverging' is only valid for kind='combined'."""
+    X, batch = simulate_data(n_samples=100, n_features=25)
+    combat = ComBat(batch=batch, method="johnson").fit(X)
+
+    with pytest.raises(ValueError, match="only available for kind='combined'"):
+        plot_feature_diagnostics(combat, kind="location", layout="diverging")
+
+
+def test_plot_feature_diagnostics_invalid_layout_raises():
+    """An unknown layout value raises ValueError."""
+    X, batch = simulate_data(n_samples=100, n_features=25)
+    combat = ComBat(batch=batch, method="johnson").fit(X)
+
+    with pytest.raises(ValueError, match="layout must be"):
+        plot_feature_diagnostics(combat, layout="bogus")
+
+
 def test_plot_feature_diagnostics_mode_magnitude():
     """Test plot_feature_diagnostics with mode='magnitude'."""
     X, batch = simulate_data(n_samples=100, n_features=25)

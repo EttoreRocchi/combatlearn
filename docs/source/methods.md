@@ -1,6 +1,8 @@
 # Method Guide
 
-combatlearn implements four variants of the ComBat algorithm. This guide helps you choose the right method for your use case.
+combatlearn implements several variants of the ComBat algorithm. This guide helps you choose the right method for your use case.
+
+Each `method` also accepts case- and separator-insensitive literature aliases: `classic_combat` (johnson), `neurocombat` (fortin), `covbat` (chen), `longcombat` (longitudinal), `combat_gam` (gam), `covbatgam` (covbat_gam).
 
 ## Johnson Method (Classic ComBat)
 
@@ -213,6 +215,59 @@ Longitudinal ComBat's advantage - separating within- from between-subject varian
 
 For a subject **unseen at fit** - which is every test subject under correct subject-grouped cross-validation (`GroupKFold` on `subject_id`) - the random intercept is zero by construction, so the correction reduces toward Fortin, but with scale parameters calibrated on subject-centred residuals applied to data that still carries the between-subject spread. In that setting it offers little over Fortin and can even harmonise slightly worse. **For cross-validated prediction that must generalise to new subjects, prefer `method="fortin"`; reserve `method="longitudinal"` for harmonising a full repeated-measures dataset for downstream analysis.**
 
+## GAM Methods (ComBat-GAM and CovBat-GAM)
+
+**Reference**: Pomponio et al. (2020)
+
+`method="gam"` is Fortin with the continuous covariates modeled **nonlinearly** using B-spline bases, and `method="covbat_gam"` is the same nonlinear covariate model inside CovBat (the Chen PCA step). This matters when a biological covariate has a nonlinear effect on the features - the canonical case is **age across the lifespan**, which is markedly nonlinear.
+
+Unlike Longitudinal ComBat, the GAM methods are fully **inductive and cross-validation-safe**: the spline knots are learned from the training data and stored, the basis is rebuilt from those knots at transform time, and held-out values outside the training range are clamped to the boundary knots. They use the same `fit`/`transform` contract as Fortin/Chen.
+
+### When to Use
+
+- A continuous covariate (e.g. age) has a nonlinear relationship with the features
+- The covariate is correlated with batch (e.g. sites recruited different age ranges), where a linear model would confound the nonlinear covariate effect with the batch effect
+- Use `gam` for the Fortin setting and `covbat_gam` for the high-dimensional CovBat setting
+
+### Algorithm
+
+1. Replace each continuous covariate listed in `smooth_terms` with its B-spline basis (degree-`spline_degree`, `spline_df` basis functions; interior knots at training quantiles, boundary knots at the data range or `smooth_term_bounds`). One basis column is dropped per term for identifiability against the batch indicators.
+2. Run the unchanged Fortin (`gam`) or CovBat (`covbat_gam`) empirical-Bayes pipeline on the resulting design.
+
+### Example
+
+```python
+from combatlearn import ComBat
+import pandas as pd
+
+age = pd.DataFrame({"age": [25, 30, 45, ...]})  # nonlinear lifespan effect
+
+combat = ComBat(
+    batch=batch,
+    method="gam",
+    continuous_covariates=age,
+    discrete_covariates=sex,
+    smooth_terms=["age"],   # default None smooths all continuous covariates
+    spline_df=10,           # B-spline degrees of freedom (default 10)
+    spline_degree=3,        # cubic (default 3)
+    # smooth_term_bounds=(0, 100),  # optional; widen to cover held-out data
+)
+X_corrected = combat.fit_transform(X)
+```
+
+### Advantages
+
+✅ Captures nonlinear covariate effects (e.g. age over the lifespan)
+✅ Avoids confounding a nonlinear covariate with batch when the two are correlated
+✅ Inductive and cross-validation-safe, like Fortin/Chen
+✅ No new runtime dependency (B-splines built with SciPy)
+
+### Limitations
+
+❌ Requires at least one continuous covariate (raises otherwise)
+❌ A smooth term needs enough distinct values to support `spline_df` (raises otherwise)
+❌ Slightly more parameters to estimate than the linear Fortin/Chen models
+
 ## Parametric vs Non-Parametric
 
 All methods support both parametric and non-parametric empirical Bayes:
@@ -269,8 +324,9 @@ Samples in the reference batch remain unchanged after correction.
 
 1. **Harmonising a complete repeated-measures cohort in-sample?** → Use Longitudinal (for cross-validated prediction on *new* subjects, use Fortin)
 2. **No covariates?** → Use Johnson
-3. **Have covariates + low/normal dimensionality?** → Use Fortin
-4. **Have covariates + high dimensionality?** → Use Chen
+3. **A continuous covariate has a nonlinear effect (e.g. age)?** → Use GAM (`gam`, or `covbat_gam` for high dimensionality)
+4. **Have covariates + low/normal dimensionality?** → Use Fortin
+5. **Have covariates + high dimensionality?** → Use Chen
 
 ## Next Steps
 

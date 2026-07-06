@@ -202,3 +202,15 @@ def test_random_intercept_matches_statsmodels():
     np.testing.assert_allclose(beta[:, 0], res.fe_params, rtol=0.02, atol=0.02)
     np.testing.assert_allclose(sigma2[0], res.scale, rtol=0.05)
     np.testing.assert_allclose(tau2, sm_tau2, rtol=0.12, atol=0.05)
+
+
+def test_longcombat_alias_matches_longitudinal():
+    """The 'longcombat' alias produces the same result as method='longitudinal'."""
+    X, batch, subject, time = simulate_longitudinal_data()
+    out_alias = ComBat(
+        batch=batch, subject_id=subject, time_covariate=time, method="longcombat"
+    ).fit_transform(X)
+    out_canon = ComBat(
+        batch=batch, subject_id=subject, time_covariate=time, method="longitudinal"
+    ).fit_transform(X)
+    np.testing.assert_allclose(out_alias.values, out_canon.values, rtol=1e-10, atol=1e-10)

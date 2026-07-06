@@ -32,8 +32,12 @@ pipe.fit_transform(X)
 | `'fortin'` | When you have biological covariates (e.g., age, sex, diagnosis) that should be preserved during correction. |
 | `'chen'` | When batch effects also affect the covariance structure of the data, not just means and variances. Extends Fortin with PCA-based covariance correction. |
 | `'longitudinal'` | In-sample harmonization of a complete repeated-measures cohort (same subjects measured multiple times). Extends Fortin with a per-subject random intercept. For cross-validated prediction on *new* subjects, prefer `'fortin'`. |
+| `'gam'` | When a continuous covariate has a nonlinear effect on the features (e.g., age over the lifespan). Extends Fortin by modeling the covariates in `smooth_terms` with B-splines. Inductive and cross-validation-safe. |
+| `'covbat_gam'` | The `'gam'` nonlinear covariate model combined with CovBat's PCA-based covariance correction. |
 
-Start with `'johnson'` if you have no covariates, or `'fortin'` if you do. Use `'chen'` only if you have evidence of covariance-level batch effects, and `'longitudinal'` to harmonise a complete repeated-measures cohort in-sample (not for cross-validated prediction on new subjects - use `'fortin'` there).
+Start with `'johnson'` if you have no covariates, or `'fortin'` if you do. Use `'chen'` for covariance-level batch effects, `'gam'`/`'covbat_gam'` when a continuous covariate (such as age) acts nonlinearly, and `'longitudinal'` to harmonise a complete repeated-measures cohort in-sample (not for cross-validated prediction on new subjects - use `'fortin'` there).
+
+`method` also accepts literature aliases (case- and separator-insensitive): `classic_combat`, `neurocombat`, `covbat`, `longcombat`, `combat_gam`, `covbatgam`.
 
 ---
 
@@ -62,6 +66,19 @@ Subjects that were not seen during `fit` are corrected with a zero random interc
 Usually not - prefer `method="fortin"` there. Longitudinal ComBat's benefit (separating within- from between-subject variance and modelling each subject's intercept) is realised **in-sample**. For a subject **unseen at fit** - which is every test subject under correct subject-grouped CV (`GroupKFold` on `subject_id`) - the random intercept is zero, so the correction reduces toward Fortin, with scale parameters calibrated on subject-centred residuals applied to test data that still carries the between-subject spread. In practice it offers little over Fortin on new subjects, and can harmonise slightly worse.
 
 Its natural use is **transductive**: harmonise a complete repeated-measures cohort in one pass with `fit_transform(X)` (every subject present, every subject gets its random intercept), then run your downstream group-level analysis on the corrected data. Use `method="fortin"` when the goal is cross-validated prediction that must generalise to new subjects.
+
+---
+
+## What are `method="gam"` / `method="covbat_gam"` and the spline parameters?
+
+Use the GAM methods (Pomponio et al., 2020) when a continuous covariate has a **nonlinear** effect on the features - the textbook case is age over the lifespan. `method="gam"` is Fortin with the covariates listed in `smooth_terms` modeled by B-splines instead of linearly; `method="covbat_gam"` adds CovBat's covariance correction on top. They are most valuable when the nonlinear covariate is also correlated with batch, where a linear model would absorb part of the covariate's nonlinear effect into the batch correction.
+
+- **`smooth_terms`** (optional): which continuous covariates to model nonlinearly, by column name or integer position. Default `None` smooths every continuous covariate. A term needs at least `spline_df` distinct values.
+- **`spline_df`** (default 10): B-spline degrees of freedom (basis functions) per term.
+- **`spline_degree`** (default 3): B-spline degree; 3 is cubic.
+- **`smooth_term_bounds`** (optional): boundary knots, as a single `(lo, hi)` for all terms or a `{term: (lo, hi)}` dict. Set them wide enough to cover any held-out data; they must contain the training range.
+
+Unlike Longitudinal ComBat, the GAM methods are fully inductive and cross-validation-safe: knots are learned on the training data and reused at transform, and held-out values beyond the boundary knots are clamped (constant extrapolation), so `transform` never fails on out-of-range covariates.
 
 ---
 

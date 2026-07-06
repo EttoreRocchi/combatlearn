@@ -13,7 +13,7 @@ from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.utils.validation import check_array, check_is_fitted
 
 from ._utils import _subset
-from .core import ArrayLike, ComBatModel
+from .core import ArrayLike, ComBatModel, _resolve_method
 
 
 class ComBat(BaseEstimator, TransformerMixin):  # type: ignore[misc]
@@ -35,8 +35,13 @@ class ComBat(BaseEstimator, TransformerMixin):  # type: ignore[misc]
         ``method='longitudinal'``, ignored otherwise.
     time_covariate : array-like, optional
         Continuous time variable for repeated measures (Longitudinal only).
-    method : {'johnson', 'fortin', 'chen', 'longitudinal'}, default='johnson'
-        ComBat variant to use.
+    method : {'johnson', 'fortin', 'chen', 'longitudinal', 'gam', \
+'covbat_gam'}, default='johnson'
+        ComBat variant to use. 'gam'/'covbat_gam' model the continuous
+        covariates in ``smooth_terms`` nonlinearly with B-splines (ComBat-GAM,
+        Pomponio et al. 2020). Literature aliases are also accepted:
+        'classic_combat' (johnson), 'neurocombat' (fortin), 'covbat' (chen),
+        'longcombat' (longitudinal), 'combat_gam' (gam).
     parametric : bool, default=True
         Use parametric empirical Bayes.
     mean_only : bool, default=False
@@ -47,6 +52,16 @@ class ComBat(BaseEstimator, TransformerMixin):  # type: ignore[misc]
         Numerical jitter for stability.
     covbat_cov_thresh : float or int, default=0.9
         CovBat variance threshold for PCs.
+    smooth_terms : list of str or int, optional
+        Continuous covariates to model nonlinearly (gam/covbat_gam only).
+        Default (None) smooths every continuous covariate.
+    spline_df : int, default=10
+        B-spline degrees of freedom per smooth term.
+    spline_degree : int, default=3
+        B-spline degree (3 = cubic).
+    smooth_term_bounds : tuple of (float, float) or dict, optional
+        Boundary knots for the splines; a single ``(lo, hi)`` for all terms or a
+        ``{term: (lo, hi)}`` dict. Default uses each term's training min/max.
     """
 
     _NEAR_ZERO_VAR_THRESH: float = 1e-10
@@ -66,6 +81,10 @@ class ComBat(BaseEstimator, TransformerMixin):  # type: ignore[misc]
         reference_batch: str | None = None,
         eps: float = 1e-8,
         covbat_cov_thresh: float | int = 0.9,
+        smooth_terms: list[str | int] | None = None,
+        spline_df: int = 10,
+        spline_degree: int = 3,
+        smooth_term_bounds: tuple[float, float] | dict[Any, tuple[float, float]] | None = None,
     ) -> None:
         self.batch = batch
         self.discrete_covariates = discrete_covariates
@@ -78,6 +97,10 @@ class ComBat(BaseEstimator, TransformerMixin):  # type: ignore[misc]
         self.reference_batch = reference_batch
         self.eps = eps
         self.covbat_cov_thresh = covbat_cov_thresh
+        self.smooth_terms = smooth_terms
+        self.spline_df = spline_df
+        self.spline_degree = spline_degree
+        self.smooth_term_bounds = smooth_term_bounds
 
     def _validate_inputs(self, X: ArrayLike, *, fitting: bool = False) -> None:
         """Validate X and, during fitting, batch/covariates for NaN/Inf."""
@@ -171,10 +194,14 @@ class ComBat(BaseEstimator, TransformerMixin):  # type: ignore[misc]
                 stacklevel=3,
             )
 
-        # Covariate collinearity with batch (fortin/chen/longitudinal only)
-        if self.method.lower() in {"fortin", "chen", "longitudinal"} and (
-            disc is not None or cont is not None or time is not None
-        ):
+        # Covariate collinearity with batch (covariate-aware methods only)
+        if _resolve_method(self.method) in {
+            "fortin",
+            "chen",
+            "longitudinal",
+            "gam",
+            "covbat_gam",
+        } and (disc is not None or cont is not None or time is not None):
             batch_dummies = pd.get_dummies(batch_ser, drop_first=True).astype(float)
             cov_parts: list[pd.DataFrame] = []
             if disc is not None:
@@ -250,6 +277,10 @@ class ComBat(BaseEstimator, TransformerMixin):  # type: ignore[misc]
             reference_batch=self.reference_batch,
             eps=self.eps,
             covbat_cov_thresh=self.covbat_cov_thresh,
+            smooth_terms=self.smooth_terms,
+            spline_df=self.spline_df,
+            spline_degree=self.spline_degree,
+            smooth_term_bounds=self.smooth_term_bounds,
         )
 
         batch_vec = _subset(self.batch, idx)

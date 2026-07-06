@@ -401,6 +401,7 @@ def plot_feature_diagnostics(
     top_n: int = 20,
     kind: Literal["location", "scale", "combined"] = "combined",
     mode: Literal["magnitude", "distribution"] = "magnitude",
+    layout: Literal["grouped", "diverging"] = "grouped",
     weighted: bool = True,
     figsize: tuple[int, int] = (8, 10),
 ) -> Any:
@@ -426,6 +427,16 @@ def plot_feature_diagnostics(
         - 'distribution': y-axis shows relative contribution (proportion), includes
           annotation showing cumulative contribution of top_n features
           (e.g., "Top 20 features explain 75% of total batch effect")
+    layout : {'grouped', 'diverging'}, default='grouped'
+        Only used when ``kind='combined'``.
+
+        - 'grouped': location and scale bars side-by-side on a single shared
+          x-axis.
+        - 'diverging': back-to-back bars with location growing leftward and
+          scale growing rightward, sharing the feature axis but with an
+          independent x-axis and grid per side. Keeps the absolute (or
+          relative) values of ``mode`` while giving each component its own
+          scale, so a small component is not visually crushed by a large one.
     weighted : bool, default=True
         If True, batch effects are weighted by batch sample size.
         Passed to :func:`feature_batch_diagnostics`.
@@ -443,6 +454,7 @@ def plot_feature_diagnostics(
         If the model is not fitted, or if kind/mode is invalid.
     """
     import matplotlib.pyplot as plt
+    from matplotlib.ticker import FuncFormatter
 
     if not hasattr(combat, "_model") or not hasattr(combat._model, "_gamma_star"):
         raise ValueError(
@@ -455,69 +467,113 @@ def plot_feature_diagnostics(
     if mode not in ["magnitude", "distribution"]:
         raise ValueError(f"mode must be 'magnitude' or 'distribution', got '{mode}'")
 
+    if layout not in ["grouped", "diverging"]:
+        raise ValueError(f"layout must be 'grouped' or 'diverging', got '{layout}'")
+
+    if layout == "diverging" and kind != "combined":
+        raise ValueError("layout='diverging' is only available for kind='combined'")
+
     importance_df = feature_batch_diagnostics(combat, mode=mode, weighted=weighted)
     top_features = importance_df.head(top_n)
 
     # Reverse so highest values are at the top of the horizontal bar plot
     top_features = top_features.iloc[::-1]
 
-    fig, ax = plt.subplots(figsize=figsize)
-
-    if kind == "combined":
-        # Grouped horizontal bar plot showing location and scale side-by-side
-        y = np.arange(len(top_features))
-        height = 0.35
-
-        ax.barh(
-            y + height / 2,
-            top_features["location"],
-            height,
-            label="Location",
-            color="steelblue",
-            edgecolor="black",
-            linewidth=0.5,
-        )
-        ax.barh(
-            y - height / 2,
-            top_features["scale"],
-            height,
-            label="Scale",
-            color="coral",
-            edgecolor="black",
-            linewidth=0.5,
-        )
-
-        ax.set_yticks(y)
-        ax.set_yticklabels(top_features.index)
-        ax.legend()
-    else:
-        # Single horizontal bar plot for location or scale
-        color = "steelblue" if kind == "location" else "coral"
-        ax.barh(
-            range(len(top_features)),
-            top_features[kind],
-            color=color,
-            edgecolor="black",
-            linewidth=0.5,
-        )
-        ax.set_yticks(range(len(top_features)))
-        ax.set_yticklabels(top_features.index)
-
-    # Set labels and title
-    ax.set_ylabel("Feature")
     if mode == "magnitude":
-        ax.set_xlabel("Batch Effect Magnitude (RMS)")
+        value_label = "Magnitude (RMS)"
         title_str = f"Top {top_n} Features by Batch Effect"
     else:
-        ax.set_xlabel("Relative Contribution")
+        value_label = "Relative Contribution"
         title_str = f"Top {top_n} Features by Batch Effect (Distribution)"
 
-    if kind == "combined":
-        title_str += " (Location & Scale)"
-    else:
-        title_str += f" ({kind.capitalize()})"
+    if kind == "combined" and layout == "diverging":
+        # Back-to-back bars: location grows leftward, scale grows rightward,
+        # sharing the feature axis but with an independent x-axis/grid per side.
+        fig, (ax_loc, ax_scale) = plt.subplots(
+            1, 2, sharey=True, figsize=figsize, gridspec_kw={"wspace": 0}
+        )
+        y = np.arange(len(top_features))
 
-    ax.set_title(title_str)
+        ax_loc.barh(
+            y, top_features["location"], color="steelblue", edgecolor="black", linewidth=0.5
+        )
+        ax_loc.set_yticks(y)
+        ax_loc.set_yticklabels(top_features.index)
+        ax_loc.invert_xaxis()
+        ax_loc.set_title("Location")
+        ax_loc.set_xlabel(value_label)
+        ax_loc.set_ylabel("Feature")
+
+        ax_scale.barh(y, top_features["scale"], color="coral", edgecolor="black", linewidth=0.5)
+        ax_scale.set_title("Scale")
+        ax_scale.set_xlabel(value_label)
+
+        for sub_ax in (ax_loc, ax_scale):
+            sub_ax.grid(axis="x", linestyle=":", alpha=0.6)
+            sub_ax.set_axisbelow(True)
+            # Blank the zero tick: both panels share it at the center line,
+            # so the location and scale labels would otherwise overlap there.
+            sub_ax.xaxis.set_major_formatter(
+                FuncFormatter(lambda value, _pos: "" if abs(value) < 1e-9 else f"{value:g}")
+            )
+
+        fig.suptitle(title_str + " (Location & Scale)")
+    else:
+        fig, ax = plt.subplots(figsize=figsize)
+
+        if kind == "combined":
+            # Grouped horizontal bar plot showing location and scale side-by-side
+            y = np.arange(len(top_features))
+            height = 0.35
+
+            ax.barh(
+                y + height / 2,
+                top_features["location"],
+                height,
+                label="Location",
+                color="steelblue",
+                edgecolor="black",
+                linewidth=0.5,
+            )
+            ax.barh(
+                y - height / 2,
+                top_features["scale"],
+                height,
+                label="Scale",
+                color="coral",
+                edgecolor="black",
+                linewidth=0.5,
+            )
+
+            ax.set_yticks(y)
+            ax.set_yticklabels(top_features.index)
+            ax.legend()
+        else:
+            # Single horizontal bar plot for location or scale
+            color = "steelblue" if kind == "location" else "coral"
+            ax.barh(
+                range(len(top_features)),
+                top_features[kind],
+                color=color,
+                edgecolor="black",
+                linewidth=0.5,
+            )
+            ax.set_yticks(range(len(top_features)))
+            ax.set_yticklabels(top_features.index)
+
+        ax.set_ylabel("Feature")
+        if mode == "magnitude":
+            ax.set_xlabel("Batch Effect Magnitude (RMS)")
+        else:
+            ax.set_xlabel("Relative Contribution")
+
+        if kind == "combined":
+            title_str += " (Location & Scale)"
+        else:
+            title_str += f" ({kind.capitalize()})"
+
+        ax.set_title(title_str)
+
     plt.tight_layout()
 
     # For distribution mode, print cumulative contribution

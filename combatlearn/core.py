@@ -1,10 +1,12 @@
 """ComBat algorithm core.
 
-`ComBatModel` implements four variants of the ComBat algorithm:
+`ComBatModel` implements several variants of the ComBat algorithm:
     * Johnson et al. (2007) vanilla ComBat (method="johnson")
     * Fortin et al. (2018) extension with covariates (method="fortin")
     * Chen et al. (2022) CovBat (method="chen")
     * Beer et al. (2020) Longitudinal ComBat (method="longitudinal")
+    * Pomponio et al. (2020) ComBat-GAM, spline covariates (method="gam")
+    * CovBat with GAM covariates (method="covbat_gam")
 """
 
 from __future__ import annotations
@@ -16,6 +18,7 @@ import numpy as np
 import numpy.linalg as la
 import numpy.typing as npt
 import pandas as pd
+from scipy.interpolate import BSpline
 from sklearn.decomposition import PCA
 
 from ._mixed import fit_random_intercept
@@ -23,18 +26,54 @@ from ._mixed import fit_random_intercept
 ArrayLike: TypeAlias = pd.DataFrame | pd.Series | npt.NDArray[Any]
 FloatArray: TypeAlias = npt.NDArray[np.float64]
 
+_METHOD_ALIASES: dict[str, str] = {
+    "classiccombat": "johnson",
+    "neurocombat": "fortin",
+    "covbat": "chen",
+    "longcombat": "longitudinal",
+    "combatgam": "gam",
+    "covbatgam": "covbat_gam",
+}
+
+_GAM_METHODS: frozenset[str] = frozenset({"gam", "covbat_gam"})
+
+
+def _resolve_method(method: str) -> str:
+    """Resolve a method name or literature alias to its canonical (author) name.
+
+    Author keys pass through unchanged; method-name aliases map to them, e.g.
+    ``"classic_combat"`` -> ``"johnson"``, ``"neurocombat"`` -> ``"fortin"``,
+    ``"covbat"`` -> ``"chen"``, ``"combat_gam"`` -> ``"gam"``. Case- and
+    separator-insensitive (hyphens, underscores, and spaces are ignored for
+    alias matching), so ``"covbat_gam"``, ``"covbat-gam"`` and ``"CovBatGAM"``
+    all resolve to the canonical ``"covbat_gam"``.
+    """
+    raw = method.lower()
+    stripped = raw.replace("-", "").replace("_", "").replace(" ", "")
+    return _METHOD_ALIASES.get(stripped, raw)
+
 
 class ComBatModel:
     """ComBat algorithm.
 
     Parameters
     ----------
-    method : {'johnson', 'fortin', 'chen', 'longitudinal'}, default='johnson'
+    method : {'johnson', 'fortin', 'chen', 'longitudinal', 'gam', \
+'covbat_gam'}, default='johnson'
         * 'johnson' - classic ComBat.
         * 'fortin' - covariate-aware ComBat.
         * 'chen' - CovBat, PCA-based ComBat.
         * 'longitudinal' - Longitudinal ComBat; requires a per-sample
           ``subject_id`` for the random intercept.
+        * 'gam' - ComBat-GAM (Pomponio et al. 2020); like 'fortin' but the
+          continuous covariates in ``smooth_terms`` are modeled with B-spline
+          bases instead of linearly.
+        * 'covbat_gam' - CovBat with the same spline covariate modeling.
+
+        Literature aliases are also accepted (case- and separator-insensitive):
+        ``'classic_combat'`` (johnson), ``'neurocombat'`` (fortin),
+        ``'covbat'`` (chen), ``'longcombat'`` (longitudinal),
+        ``'combat_gam'`` (gam).
     parametric : bool, default=True
         Use the parametric empirical Bayes variant.
     mean_only : bool, default=False
@@ -45,6 +84,22 @@ class ComBatModel:
     covbat_cov_thresh : float or int, default=0.9
         CovBat: cumulative variance threshold (0, 1] to retain PCs, or
         integer >= 1 specifying the number of components directly.
+    smooth_terms : list of str or int, optional
+        Continuous-covariate columns to model nonlinearly with B-splines
+        (``'gam'``/``'covbat_gam'`` only). Column names, or integer positions
+        into ``continuous_covariates`` when it is an unnamed array. Default
+        (``None``) smooths every continuous covariate.
+    spline_df : int, default=10
+        Degrees of freedom (number of B-spline basis functions) per smooth
+        term, before the identifiability column is dropped. Must be
+        ``>= spline_degree + 1``.
+    spline_degree : int, default=3
+        B-spline degree (3 = cubic). Must be ``>= 1``.
+    smooth_term_bounds : tuple of (float, float) or dict, optional
+        Boundary knots for the spline basis. A single ``(lo, hi)`` tuple is
+        applied to every smooth term; a ``{term: (lo, hi)}`` dict sets them per
+        term. Bounds should contain the full data range (training and any
+        held-out data). Default uses each term's training min/max.
     eps : float, default=1e-8
         Numerical jitter to avoid division-by-zero.
     """
@@ -52,12 +107,18 @@ class ComBatModel:
     def __init__(
         self,
         *,
-        method: Literal["johnson", "fortin", "chen", "longitudinal"] = "johnson",
+        method: Literal[
+            "johnson", "fortin", "chen", "longitudinal", "gam", "covbat_gam"
+        ] = "johnson",
         parametric: bool = True,
         mean_only: bool = False,
         reference_batch: str | None = None,
         eps: float = 1e-8,
         covbat_cov_thresh: float | int = 0.9,
+        smooth_terms: list[str | int] | None = None,
+        spline_df: int = 10,
+        spline_degree: int = 3,
+        smooth_term_bounds: tuple[float, float] | dict[Any, tuple[float, float]] | None = None,
     ) -> None:
         self.method: str = method
         self.parametric: bool = parametric
@@ -65,6 +126,12 @@ class ComBatModel:
         self.reference_batch: str | None = reference_batch
         self.eps: float = float(eps)
         self.covbat_cov_thresh: float | int = covbat_cov_thresh
+        self.smooth_terms: list[str | int] | None = smooth_terms
+        self.spline_df: int = int(spline_df)
+        self.spline_degree: int = int(spline_degree)
+        self.smooth_term_bounds: tuple[float, float] | dict[Any, tuple[float, float]] | None = (
+            smooth_term_bounds
+        )
 
         self._batch_levels: pd.Index
         self._grand_mean: pd.Series
@@ -84,6 +151,22 @@ class ComBatModel:
         self._pc_delta_star: FloatArray
         self._re_subject_levels: pd.Index
         self._re_blup: FloatArray
+        self._smooth_cols: list[Any]
+        self._smooth_knots: dict[Any, FloatArray]
+        self._smooth_basis_columns: dict[Any, list[str]]
+
+        # Validate spline parameters (used by the gam / covbat_gam methods)
+        if self.spline_degree < 1:
+            raise ValueError(
+                f"spline_degree={self.spline_degree!r} is invalid. Expected an int >= 1 "
+                f"(3 = cubic, the ComBat-GAM default)."
+            )
+        if self.spline_df < self.spline_degree + 1:
+            raise ValueError(
+                f"spline_df={self.spline_df!r} is too small for spline_degree="
+                f"{self.spline_degree!r}. Expected spline_df >= spline_degree + 1 "
+                f"(>= {self.spline_degree + 1}); the default is 10."
+            )
 
         # Validate covbat_cov_thresh
         if isinstance(self.covbat_cov_thresh, float):
@@ -174,14 +257,22 @@ class ComBatModel:
         self : ComBatModel
             Fitted model.
         """
-        method = self.method.lower()
-        if method not in {"johnson", "fortin", "chen", "longitudinal"}:
+        method = _resolve_method(self.method)
+        if method not in {"johnson", "fortin", "chen", "longitudinal", "gam", "covbat_gam"}:
             raise ValueError(
-                f"method={self.method!r} is not recognized. "
-                f"Expected one of 'johnson', 'fortin', 'chen', or 'longitudinal'."
+                f"method={self.method!r} is not recognized. Expected an author name "
+                f"('johnson', 'fortin', 'chen', 'longitudinal', 'gam', 'covbat_gam') or a "
+                f"method-name alias ('classic_combat', 'neurocombat', 'covbat', "
+                f"'longcombat', 'combat_gam')."
             )
         if not isinstance(X, pd.DataFrame):
             X = pd.DataFrame(X)
+        if X.shape[1] < 2:
+            warnings.warn(
+                "Only one feature: empirical-Bayes shrinkage is inactive and ComBat "
+                "reduces to per-batch standardization.",
+                stacklevel=2,
+            )
         idx = X.index
         batch = self._as_series(batch, idx, "batch")
 
@@ -206,9 +297,9 @@ class ComBatModel:
             if disc is not None or cont is not None:
                 warnings.warn("Covariates are ignored when using method='johnson'.", stacklevel=2)
             self._fit_johnson(X, batch)
-        elif method == "fortin":
+        elif method in {"fortin", "gam"}:
             self._fit_fortin(X, batch, disc, cont)
-        elif method == "chen":
+        elif method in {"chen", "covbat_gam"}:
             self._fit_chen(X, batch, disc, cont)
         elif method == "longitudinal":
             self._fit_longitudinal(X, batch, disc, cont, subject_id, time_covariate)
@@ -286,6 +377,140 @@ class ComBatModel:
         self._n_per_batch = n_per_batch
         self._design_cond: float | None = None
 
+    def _is_gam(self) -> bool:
+        """Whether the resolved method models smooth terms with B-splines."""
+        return _resolve_method(self.method) in _GAM_METHODS
+
+    def _resolve_smooth_columns(self, cont: pd.DataFrame | None) -> list[Any]:
+        """Resolve ``smooth_terms`` to concrete column labels in ``cont``.
+
+        Raises if no continuous covariates are available (a GAM method needs at
+        least one smooth term) or if a requested term cannot be located.
+        """
+        if cont is None or cont.shape[1] == 0:
+            raise ValueError(
+                f"method={self.method!r} (ComBat-GAM) requires at least one continuous "
+                f"covariate to model with splines, but `continuous_covariates` is empty. "
+                f"Pass continuous covariates, or use method='fortin'/'chen' for a linear fit."
+            )
+        cols = list(cont.columns)
+        if self.smooth_terms is None:
+            return cols
+        if len(self.smooth_terms) == 0:
+            raise ValueError(
+                "smooth_terms is an empty list, so no covariate would be modeled with "
+                "splines. Pass at least one term, set smooth_terms=None to smooth all "
+                "continuous covariates, or use method='fortin'/'chen'."
+            )
+        resolved: list[Any] = []
+        for t in self.smooth_terms:
+            if t in cont.columns:
+                resolved.append(t)
+            elif isinstance(t, int | np.integer) and 0 <= int(t) < len(cols):
+                resolved.append(cols[int(t)])
+            else:
+                raise ValueError(
+                    f"smooth_term {t!r} not found in continuous_covariates "
+                    f"(columns: {cols}). Use a column name or a valid integer position."
+                )
+        return resolved
+
+    def _term_bounds(self, col: Any, x: FloatArray) -> tuple[float, float]:
+        """Boundary knots for a smooth term, from ``smooth_term_bounds`` or data."""
+        b = self.smooth_term_bounds
+        if b is None:
+            return float(np.min(x)), float(np.max(x))
+        if isinstance(b, dict):
+            if col in b:
+                lo, hi = b[col]
+                return float(lo), float(hi)
+            return float(np.min(x)), float(np.max(x))
+        lo, hi = b
+        return float(lo), float(hi)
+
+    def _spline_knots(self, x: FloatArray, lo: float, hi: float) -> FloatArray:
+        """Knot vector: ``degree+1`` boundary knots plus interior sample quantiles.
+
+        Matches ``statsmodels.gam.smooth_basis.BSplines`` (and hence neuroHarmonize):
+        ``spline_df - spline_degree - 1`` interior knots at equally spaced quantiles.
+        """
+        degree = self.spline_degree
+        n_interior = self.spline_df - degree - 1
+        if n_interior > 0:
+            probs = np.linspace(0.0, 1.0, n_interior + 2)[1:-1]
+            interior = np.quantile(x, probs)
+        else:
+            interior = np.empty(0, dtype=np.float64)
+        knots = np.concatenate([np.full(degree + 1, lo), interior, np.full(degree + 1, hi)])
+        return np.asarray(knots, dtype=np.float64)
+
+    def _spline_basis(self, x: FloatArray, knots: FloatArray) -> FloatArray:
+        """B-spline design matrix with the first (identifiability) column dropped.
+
+        Out-of-range values are clamped to the boundary knots (constant
+        extrapolation), so held-out data never falls outside the basis support.
+        """
+        xc = np.clip(np.asarray(x, dtype=np.float64), knots[0], knots[-1])
+        basis = BSpline.design_matrix(xc, knots, self.spline_degree).toarray()
+        return np.asarray(basis[:, 1:], dtype=np.float64)
+
+    def _apply_smooth_terms(self, cont: pd.DataFrame | None, *, fit: bool) -> pd.DataFrame:
+        """Replace each smooth continuous column with its B-spline basis columns.
+
+        Non-smooth continuous columns are kept (linear). On ``fit`` the knots are
+        computed from the training data and stored; on transform the stored knots
+        are reused so the basis is reproducible and leakage-free.
+        """
+        if cont is None or cont.shape[1] == 0:
+            raise ValueError(
+                f"method={self.method!r} (ComBat-GAM) requires at least one continuous "
+                f"covariate to model with splines, but `continuous_covariates` is empty. "
+                f"Pass continuous covariates, or use method='fortin'/'chen' for a linear fit."
+            )
+        if fit:
+            self._smooth_cols = self._resolve_smooth_columns(cont)
+            self._smooth_knots = {}
+            self._smooth_basis_columns = {}
+        smooth_cols = set(self._smooth_cols)
+
+        blocks: list[pd.DataFrame] = []
+        for col in cont.columns:
+            if col not in smooth_cols:
+                blocks.append(cont[[col]].astype(float))
+                continue
+            x = cont[col].to_numpy(dtype=np.float64)
+            if fit:
+                if np.unique(x).size < self.spline_df:
+                    raise ValueError(
+                        f"Smooth term {col!r} has only {int(np.unique(x).size)} distinct "
+                        f"value(s), too few for spline_df={self.spline_df} (need >= "
+                        f"{self.spline_df}). Lower spline_df, drop it from smooth_terms, "
+                        f"or model it linearly with method='fortin'/'chen'."
+                    )
+                lo, hi = self._term_bounds(col, x)
+                if lo >= hi:
+                    raise ValueError(
+                        f"smooth_term_bounds for {col!r} must satisfy lo < hi, got ({lo}, {hi})."
+                    )
+                if x.min() < lo or x.max() > hi:
+                    raise ValueError(
+                        f"smooth_term_bounds ({lo}, {hi}) for {col!r} do not contain the "
+                        f"training range [{x.min():.4g}, {x.max():.4g}]. Bounds must cover the "
+                        f"full data range (set them wider to include held-out data); held-out "
+                        f"values beyond the bounds are clamped at transform."
+                    )
+                knots = self._spline_knots(x, lo, hi)
+                basis = self._spline_basis(x, knots)
+                names = [f"{col}__spline{j}" for j in range(basis.shape[1])]
+                self._smooth_knots[col] = knots
+                self._smooth_basis_columns[col] = names
+            else:
+                knots = self._smooth_knots[col]
+                basis = self._spline_basis(x, knots)
+                names = self._smooth_basis_columns[col]
+            blocks.append(pd.DataFrame(basis, index=cont.index, columns=names))
+        return pd.concat(blocks, axis=1)
+
     def _fit_fortin(
         self,
         X: pd.DataFrame,
@@ -293,7 +518,15 @@ class ComBatModel:
         disc: pd.DataFrame | None,
         cont: pd.DataFrame | None,
     ) -> None:
-        """Fortin et al. (2018) neuroComBat."""
+        """Fortin et al. (2018) neuroComBat (and Pomponio et al. 2020 ComBat-GAM).
+
+        For the ``gam``/``covbat_gam`` methods the smooth continuous covariates are
+        replaced by B-spline bases before the (otherwise identical) least-squares ->
+        standardize -> empirical-Bayes pipeline.
+        """
+        if self._is_gam():
+            cont = self._apply_smooth_terms(cont, fit=True)
+
         self._batch_levels = batch.cat.categories
         n_batch = len(self._batch_levels)
         n_samples = len(X)
@@ -409,6 +642,15 @@ class ComBatModel:
 
         self._covbat_pca = pca
         self._covbat_n_pc = n_pc
+
+        if n_pc < 2:
+            warnings.warn(
+                f"CovBat retained a single principal component (n_pc={n_pc}); covariance "
+                f"harmonization is not meaningful with one component, and the correction "
+                f"reduces to the mean/variance adjustment already done by Fortin. Consider "
+                f"method='fortin', or raise covbat_cov_thresh to retain more components.",
+                stacklevel=2,
+            )
 
         scores = pca.transform(X_meanvar_adj)[:, :n_pc]
         scores_df = pd.DataFrame(scores, index=X.index, columns=[f"PC{i + 1}" for i in range(n_pc)])
@@ -618,14 +860,34 @@ class ComBatModel:
         Both the parametric and non-parametric branches use an iterative
         scheme that alternates between updating gamma (location) and delta
         (scale) posteriors until convergence.
+
+        With fewer than two units (features, or PCs for CovBat) the prior
+        variance is non-identifiable, so the posterior reduces to the per-unit
+        MLE (no shrinkage) - the exact boundary limit of the estimator.
         """
         B, _p = gamma_hat.shape
         n_vec = (
             np.array(list(n_per_batch.values())) if isinstance(n_per_batch, dict) else n_per_batch
         )
+        convergence_info: list[dict[str, object]] = []
+
+        if _p < 2:
+            # < 2 units: no cross-unit prior, so reduce to the per-unit MLE.
+            self._convergence_info = [
+                {
+                    "batch": batch_names[i] if batch_names else str(i),
+                    "converged": True,
+                    "iterations": 0,
+                    "final_gamma_change": 0.0,
+                    "final_delta_change": 0.0,
+                }
+                for i in range(B)
+            ]
+            delta_star = np.ones_like(delta_hat) if self.mean_only else delta_hat.copy()
+            return gamma_hat.copy(), delta_star
+
         gamma_bar = gamma_hat.mean(axis=0)
         t2 = np.maximum(gamma_hat.var(axis=0, ddof=1), self.eps)
-        convergence_info: list[dict[str, object]] = []
 
         def postmean(
             g_hat: FloatArray,
@@ -702,14 +964,19 @@ class ComBatModel:
 
         else:
 
+            def _moment_var(delta: FloatArray) -> float:
+                # Floor non-finite / tiny prior variance (defense-in-depth).
+                s2 = float(delta.var(ddof=1))
+                return self.eps if (not np.isfinite(s2) or s2 < self.eps) else s2
+
             def aprior(delta: FloatArray) -> float:
                 m = float(delta.mean())
-                s2 = float(max(delta.var(ddof=1), self.eps))
+                s2 = _moment_var(delta)
                 return (2 * s2 + m**2) / s2
 
             def bprior(delta: FloatArray) -> float:
                 m = float(delta.mean())
-                s2 = float(max(delta.var(ddof=1), self.eps))
+                s2 = _moment_var(delta)
                 return (m * s2 + m**3) / s2
 
             gamma_star = np.empty_like(gamma_hat)
@@ -836,19 +1103,21 @@ class ComBatModel:
         disc = self._to_df(discrete_covariates, idx, "discrete_covariates")
         cont = self._to_df(continuous_covariates, idx, "continuous_covariates")
 
-        method = self.method.lower()
+        method = _resolve_method(self.method)
         if method == "johnson":
             return self._transform_johnson(X, batch)
-        elif method == "fortin":
+        elif method in {"fortin", "gam"}:
             return self._transform_fortin(X, batch, disc, cont)
-        elif method == "chen":
+        elif method in {"chen", "covbat_gam"}:
             return self._transform_chen(X, batch, disc, cont)
         elif method == "longitudinal":
             return self._transform_longitudinal(X, batch, disc, cont, subject_id, time_covariate)
         else:
             raise ValueError(
-                f"Unknown method={method!r}. Expected one of 'johnson', 'fortin', "
-                f"'chen', or 'longitudinal'."
+                f"Unknown method={self.method!r}. Expected an author name "
+                f"('johnson', 'fortin', 'chen', 'longitudinal', 'gam', 'covbat_gam') or a "
+                f"method-name alias ('classic_combat', 'neurocombat', 'covbat', "
+                f"'longcombat', 'combat_gam')."
             )
 
     def _transform_johnson(self, X: pd.DataFrame, batch: pd.Series) -> pd.DataFrame:
@@ -880,7 +1149,10 @@ class ComBatModel:
         disc: pd.DataFrame | None,
         cont: pd.DataFrame | None,
     ) -> pd.DataFrame:
-        """Fortin transform implementation."""
+        """Fortin transform implementation (also serves the gam method)."""
+        if self._is_gam():
+            cont = self._apply_smooth_terms(cont, fit=False)
+
         batch_dummies = pd.get_dummies(batch, drop_first=False).astype(float)
         batch_dummies = batch_dummies.reindex(columns=self._batch_levels, fill_value=0.0)
         if self.reference_batch is not None:

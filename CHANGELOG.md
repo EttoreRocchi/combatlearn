@@ -3,6 +3,18 @@
 All notable changes to combatlearn are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.2.0] - 2026-07-06
+
+### Added
+
+- **ComBat-GAM** (`method="gam"`) and **CovBat-GAM** (`method="covbat_gam"`): model continuous covariates nonlinearly (B-splines) instead of linearly. Inductive and cross-validation-safe like `fortin`/`chen`.
+- New parameters on `ComBat` / `ComBatModel`: `smooth_terms` (which continuous covariates to smooth; default all of them), `spline_df` (default 10), `spline_degree` (default 3), and `smooth_term_bounds` (optional per-term range).
+- **`layout="diverging"`** option on `plot_feature_diagnostics()` (for `kind="combined"`): draws location and scale as back-to-back bars, each with its own x-axis, so a small component stays readable next to a large one. Default remains `layout="grouped"`.
+
+### Changed
+
+- **Method aliases**: `method` now accepts case- and separator-insensitive literature aliases, resolved to the canonical author names: `classic_combat` (johnson), `neurocombat` (fortin), `covbat` (chen), `longcombat` (longitudinal), `combat_gam` (gam), `covbatgam` (covbat_gam).
+
 ## [2.1.0] - 2026-06-16
 
 ### Added
