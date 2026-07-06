@@ -43,6 +43,55 @@ def simulate_gam_data(
     return X, batch, cont, oracle
 
 
+def simulate_covbat_data(
+    n_samples=300,
+    n_features=12,
+    n_components=4,
+    shift=3.0,
+    signal=3.0,
+    cov_strength=2.0,
+    random_state=0,
+):
+    """GAM-style data whose *covariance* carries a genuine batch effect, for CovBat.
+
+    Returns ``(X, batch, cont)``. Unlike :func:`simulate_gam_data` (a single rank-1
+    age effect, which Fortin regresses out and CovBat then collapses to one principal
+    component), this adds a low-rank correlated block that is independent of ``age``
+    (so it survives the Fortin mean/variance step) and is rescaled per batch (so the
+    batches genuinely differ in covariance). CovBat therefore retains several principal
+    components and its covariance-harmonization step does real work.
+    """
+    rng = np.random.default_rng(random_state)
+    age = rng.uniform(20, 80, n_samples)
+    batch_arr = rng.choice(["A", "B", "C"], n_samples)
+
+    # Nonlinear age-driven mean signal (the spline mean model removes this).
+    curve = np.sin((age - 20) / 60 * 2 * np.pi)
+    mean_signal = signal * np.outer(curve, rng.uniform(0.5, 1.5, n_features))
+
+    # Low-rank correlated block, independent of age but rescaled per batch: this is
+    # the batch-covariance effect CovBat is meant to remove and Fortin cannot.
+    loadings = rng.standard_normal((n_components, n_features))
+    scores = rng.standard_normal((n_samples, n_components))
+    batch_scale = {
+        "A": np.linspace(2.0, 0.5, n_components),
+        "B": np.linspace(0.5, 2.0, n_components),
+        "C": np.ones(n_components),
+    }
+    scores = scores * np.array([batch_scale[b] for b in batch_arr])
+    correlated = cov_strength * (scores @ loadings)
+
+    noise = rng.standard_normal((n_samples, n_features))
+    shifts = {"A": shift, "B": -shift, "C": 0.3 * shift}
+    batch_shift = np.array([shifts[b] for b in batch_arr])[:, None]
+
+    X = pd.DataFrame(mean_signal + correlated + noise + batch_shift)
+    idx = X.index
+    batch = pd.Series(batch_arr, index=idx, name="batch")
+    cont = pd.DataFrame({"age": age}, index=idx)
+    return X, batch, cont
+
+
 def simulate_data(n_samples=150, n_features=25, shift=3.0, random_state=0):
     rng = np.random.default_rng(random_state)
     X = rng.standard_normal((n_samples, n_features))

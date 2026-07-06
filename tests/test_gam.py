@@ -8,7 +8,7 @@ import pytest
 from sklearn.base import clone
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
-from utils import simulate_gam_data
+from utils import simulate_covbat_data, simulate_gam_data
 
 from combatlearn import ComBat
 from combatlearn.core import ComBatModel
@@ -19,6 +19,18 @@ def _recovery_mse(corrected, oracle):
     c = corrected - corrected.mean(axis=0)
     o = oracle.values - oracle.values.mean(axis=0)
     return float(((c - o) ** 2).mean())
+
+
+def _batch_cov_discrepancy(X, batch):
+    """Mean squared deviation of each batch's covariance from the pooled covariance."""
+    Xc = np.asarray(X, dtype=float)
+    Xc = Xc - Xc.mean(axis=0)
+    batch = np.asarray(batch)
+    pooled = np.cov(Xc, rowvar=False)
+    total = 0.0
+    for lvl in np.unique(batch):
+        total += ((np.cov(Xc[batch == lvl], rowvar=False) - pooled) ** 2).mean()
+    return total
 
 
 def _batch_var(X, batch):
@@ -90,20 +102,35 @@ def test_gam_recovers_nonlinear_effect_better_than_fortin(seed):
 
 
 @pytest.mark.parametrize("seed", [0, 1, 2])
-def test_covbat_gam_engages_spline_path(seed):
-    """covbat_gam runs the spline mean model, so it is finite and differs from linear chen.
+def test_covbat_gam_harmonizes_batch_covariance(seed):
+    """covbat_gam engages the covariance step: it retains >1 PC and removes the
+    batch-covariance effect the Fortin mean/variance step leaves behind.
 
-    (covbat_gam is not compared on signal-recovery MSE: CovBat's covariance step
-    legitimately moves data off the additive oracle, washing out the mean-model gain
-    on that metric. The spline mean-model benefit itself is covered by the ``gam`` test.)
+    The data carries a genuine per-batch covariance difference that is independent of
+    age, so CovBat has real work to do beyond the spline mean model. It is not compared
+    on signal-recovery MSE because the covariance step legitimately moves data off any
+    additive oracle; the spline mean-model benefit itself is covered by the ``gam`` test.
     """
-    X, batch, cont, _ = simulate_gam_data(confound=True, nonlinear=True, random_state=seed)
+    X, batch, cont = simulate_covbat_data(random_state=seed)
+    est = ComBat(batch=batch, continuous_covariates=cont, method="covbat_gam").fit(X)
+    assert est._model._covbat_n_pc >= 2  # covariance harmonization actually runs
+
+    covbat_gam = est.transform(X)
     chen = ComBat(batch=batch, continuous_covariates=cont, method="chen").fit_transform(X)
-    covbat_gam = ComBat(batch=batch, continuous_covariates=cont, method="covbat_gam").fit_transform(
-        X
-    )
+    fortin = ComBat(batch=batch, continuous_covariates=cont, method="fortin").fit_transform(X)
+
     assert np.isfinite(covbat_gam.values).all()
-    assert not np.allclose(covbat_gam.values, chen.values)
+    assert not np.allclose(covbat_gam.values, chen.values)  # spline mean model differs
+
+    # CovBat drives the residual batch-covariance discrepancy far below Fortin's.
+    assert _batch_cov_discrepancy(covbat_gam, batch) < 0.1 * _batch_cov_discrepancy(fortin, batch)
+
+
+def test_covbat_gam_single_pc_warns_on_rank1_data():
+    """A single dominant direction collapses CovBat to one PC, and covbat_gam says so."""
+    X, batch, cont, _ = simulate_gam_data(random_state=0)
+    with pytest.warns(UserWarning, match="single principal component"):
+        ComBat(batch=batch, continuous_covariates=cont, method="covbat_gam").fit(X)
 
 
 def test_gam_matches_fortin_on_linear_unconfounded_effect():
@@ -127,7 +154,7 @@ def test_gam_design_is_full_rank():
 @pytest.mark.parametrize("parametric", [True, False])
 @pytest.mark.parametrize("mean_only", [True, False])
 def test_no_nan_or_inf(method, parametric, mean_only):
-    X, batch, cont, _ = simulate_gam_data(random_state=0)
+    X, batch, cont = simulate_covbat_data(random_state=0)
     out = ComBat(
         batch=batch,
         continuous_covariates=cont,
@@ -140,7 +167,7 @@ def test_no_nan_or_inf(method, parametric, mean_only):
 
 @pytest.mark.parametrize("method", ["gam", "covbat_gam"])
 def test_dtypes_preserved(method):
-    X, batch, cont, _ = simulate_gam_data(random_state=0)
+    X, batch, cont = simulate_covbat_data(random_state=0)
     out = ComBat(batch=batch, continuous_covariates=cont, method=method).fit_transform(X)
     assert all(np.issubdtype(dt, np.floating) for dt in out.dtypes)
 
@@ -244,7 +271,7 @@ def test_smooth_term_bounds_inside_data_raises():
 
 @pytest.mark.parametrize("alias,canonical", [("combat_gam", "gam"), ("covbatgam", "covbat_gam")])
 def test_gam_aliases_match_canonical(alias, canonical):
-    X, batch, cont, _ = simulate_gam_data(random_state=0)
+    X, batch, cont = simulate_covbat_data(random_state=0)
     out_alias = ComBat(batch=batch, continuous_covariates=cont, method=alias).fit_transform(X)
     out_canon = ComBat(batch=batch, continuous_covariates=cont, method=canonical).fit_transform(X)
     np.testing.assert_allclose(out_alias.values, out_canon.values, rtol=1e-10, atol=1e-10)

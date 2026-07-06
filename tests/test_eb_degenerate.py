@@ -19,8 +19,9 @@ def _single_feature_data(seed=0):
     rng = np.random.default_rng(seed)
     n = 150
     batch = pd.Series(rng.choice(list("ABC"), n))
-    X = pd.DataFrame(rng.standard_normal((n, 1)))
-    X.values[(batch == "A").to_numpy()] += 2.0
+    data = rng.standard_normal((n, 1))
+    data[(batch == "A").to_numpy()] += 2.0
+    X = pd.DataFrame(data)
     return X, batch
 
 
@@ -53,8 +54,9 @@ def test_covbat_nonparametric_single_pc_is_finite():
     """Many features collapsing to one PC (the common CovBat trigger) stays finite."""
     rng = np.random.default_rng(0)
     n = 120
-    X = pd.DataFrame(rng.standard_normal((n, 10)))
-    X.values[:40] += 3.0
+    data = rng.standard_normal((n, 10))
+    data[:40] += 3.0
+    X = pd.DataFrame(data)
     batch = pd.Series(rng.choice(list("ABC"), n))
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
