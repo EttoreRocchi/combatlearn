@@ -15,11 +15,14 @@
 
 ## Features
 
-- **Four ComBat Methods**:
+- **Six ComBat Methods**:
   - `method="johnson"` - Classic ComBat (Johnson et al., 2007)
   - `method="fortin"` - neuroCombat with covariates (Fortin et al., 2018)
   - `method="chen"` - CovBat PCA-based (Chen et al., 2022)
   - `method="longitudinal"` - Longitudinal ComBat for repeated measures (Beer et al., 2020)
+  - `method="gam"` - ComBat-GAM, nonlinear (spline) covariate effects (Pomponio et al., 2020)
+  - `method="covbat_gam"` - CovBat with the same nonlinear covariate modeling
+  - Each accepts case- and separator-insensitive literature aliases (e.g. `"covbat"`, `"neurocombat"`, `"combat_gam"`)
 
 - **Scikit-learn Compatible**:
   - Works seamlessly in `Pipeline` objects
@@ -31,10 +34,10 @@
   - Static (matplotlib) and interactive (plotly) visualizations
   - Before/after batch effect comparison
 
-- **Feature Importance Analysis** *(New in v1.2.0)*:
-  - Identify which features have strongest batch effects
-  - Location (mean shift) and scale (variance) decomposition
-  - Magnitude and distribution modes for different use cases
+- **Inspection & Metrics**:
+  - `feature_batch_diagnostics()` identifies which features carry the strongest batch effects, with location (mean shift) and scale (variance) decomposition
+  - `compute_batch_metrics()` quantifies correction quality (Silhouette, Davies-Bouldin, kBET, LISI, k-NN preservation, and more)
+  - `summary()` prints a diagnostic report for a fitted model
 
 ## Quick Example
 
@@ -116,6 +119,8 @@ Please consider citing the original papers:
 - [**CovBat**](https://github.com/andy1764/CovBat_Harmonization) - Chen AA et al. _Hum Brain Mapp_. 2022. doi: [10.1002/hbm.25688](https://doi.org/10.1002/hbm.25688)
 
 - [**Longitudinal ComBat**](https://github.com/jcbeer/longCombat) - Beer JC et al. _Neuroimage_. 2020. doi: [10.1016/j.neuroimage.2020.117129](https://doi.org/10.1016/j.neuroimage.2020.117129)
+
+- [**ComBat-GAM**](https://github.com/rpomponio/neuroHarmonize) - Pomponio R et al. _Neuroimage_. 2020. doi: [10.1016/j.neuroimage.2019.116450](https://doi.org/10.1016/j.neuroimage.2019.116450)
 
 ## Author
 
