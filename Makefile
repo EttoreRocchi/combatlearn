@@ -1,6 +1,7 @@
 .DEFAULT_GOAL := help
 .PHONY: help install install-docs lint format format-check pre-commit \
-        test test-cov typecheck docs docs-clean docs-serve clean publish publish-test
+        test test-cov test-all venvs typecheck docs docs-clean docs-serve \
+        clean publish publish-test
 
 # Colours
 BOLD  := \033[1m
@@ -10,6 +11,10 @@ CYAN  := \033[36m
 # Paths
 SRC   := combatlearn
 TESTS := tests
+
+# Multi-version test matrix (uv-managed venvs live under $(VENV_DIR)/py3XX)
+PY_VERSIONS := 3.10 3.11 3.12 3.13
+VENV_DIR    := .venv
 
 help:  ## Show this help message
 	@printf "$(BOLD)combatlearn - available targets$(RESET)\n\n"
@@ -48,6 +53,33 @@ test:  ## Run tests
 
 test-cov:  ## Run tests with coverage report
 	@pytest $(TESTS)/ --cov=$(SRC) --cov-report=term-missing
+
+venvs:  ## Create per-version venvs under .venv/ (uv-managed) and install dev deps
+	@command -v uv >/dev/null 2>&1 || { printf "uv not found - see https://docs.astral.sh/uv/\n"; exit 1; }
+	@uv python install $(PY_VERSIONS)
+	@for v in $(PY_VERSIONS); do \
+	  tag=py$$(echo $$v | tr -d .); \
+	  printf "$(BOLD)-> $(VENV_DIR)/$$tag$(RESET)\n"; \
+	  uv venv "$(VENV_DIR)/$$tag" --python "$$v" >/dev/null; \
+	  uv pip install --python "$(VENV_DIR)/$$tag/bin/python" -e ".[dev]" "numba>=0.60" >/dev/null; \
+	done
+	@printf "$(BOLD)All venvs ready under $(VENV_DIR)/$(RESET)\n"
+
+test-all:  ## Run the test suite across every per-version venv under .venv/
+	@fail=0; \
+	for v in $(PY_VERSIONS); do \
+	  tag=py$$(echo $$v | tr -d .); \
+	  py="$(VENV_DIR)/$$tag/bin/python"; \
+	  if [ ! -x "$$py" ]; then \
+	    printf "$(CYAN)%s$(RESET) missing - run 'make venvs'\n" "$$tag"; \
+	    fail=1; continue; \
+	  fi; \
+	  ver=$$("$$py" -V 2>&1); \
+	  printf "\n$(BOLD)=== %s (%s) ===$(RESET)\n" "$$tag" "$$ver"; \
+	  "$$py" -m pytest $(TESTS)/ -q || fail=1; \
+	done; \
+	if [ $$fail -eq 0 ]; then printf "\n$(BOLD)All versions passed.$(RESET)\n"; \
+	else printf "\n$(BOLD)Some versions failed.$(RESET)\n"; exit 1; fi
 
 # Documentation
 
