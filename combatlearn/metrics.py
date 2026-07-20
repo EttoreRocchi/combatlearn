@@ -360,7 +360,7 @@ def _variance_ratio(X: npt.NDArray[Any], batch_labels: npt.NDArray[Any]) -> floa
     if within_var < 1e-10:
         return 0.0
 
-    return between_var / within_var
+    return float(between_var / within_var)
 
 
 def _knn_preservation(

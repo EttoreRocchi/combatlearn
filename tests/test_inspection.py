@@ -3,7 +3,11 @@ import pytest
 from utils import simulate_covariate_data, simulate_data
 
 from combatlearn import ComBat
-from combatlearn.inspection import feature_batch_diagnostics, summary
+from combatlearn.inspection import (
+    batch_variance_explained,
+    feature_batch_diagnostics,
+    summary,
+)
 
 
 def test_feature_diagnostics_shape():
@@ -191,22 +195,46 @@ def test_summary_not_fitted_raises():
 
 
 def test_summary_variance_explained():
-    """summary() should contain variance explained before and after."""
+    """summary(combat, X) should contain variance explained before and after."""
     X, batch = simulate_data()
     combat = ComBat(batch=batch).fit(X)
-    combat.transform(X)
-    s = summary(combat)
+    s = summary(combat, X)
     assert "Batch var. explained (before)" in s
     assert "Batch var. explained (after)" in s
 
 
 def test_summary_variance_explained_before_only():
-    """summary() after fit() only should show before but not after."""
+    """summary() without X should show before but not after."""
     X, batch = simulate_data()
     combat = ComBat(batch=batch).fit(X)
     s = summary(combat)
     assert "Batch var. explained (before)" in s
     assert "Batch var. explained (after)" not in s
+
+
+def test_transform_does_not_set_after_attribute():
+    """transform() is side-effect-free: it must not write a diagnostic attribute."""
+    X, batch = simulate_data()
+    combat = ComBat(batch=batch).fit(X)
+    combat.transform(X)
+    assert not hasattr(combat, "_batch_var_after_")
+
+
+def test_batch_variance_explained_reduces():
+    """The post-correction batch variance is a valid fraction below the pre value."""
+    X, batch = simulate_data()
+    combat = ComBat(batch=batch).fit(X)
+    after = batch_variance_explained(combat, X)
+    assert 0.0 <= after <= 1.0
+    assert after < combat._batch_var_before_
+
+
+def test_batch_variance_explained_not_fitted_raises():
+    """batch_variance_explained before fit raises ValueError."""
+    X, batch = simulate_data()
+    combat = ComBat(batch=batch)
+    with pytest.raises(ValueError, match="not fitted"):
+        batch_variance_explained(combat, X)
 
 
 def test_summary_convergence_info():

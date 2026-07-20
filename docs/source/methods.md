@@ -164,6 +164,10 @@ covbat_cov_thresh=50  # Use exactly 50 components
 
 **Reference**: Beer et al. (2020)
 
+```{note}
+`ComBat(method="longitudinal")` is **deprecated** since v2.3.0 (it emits a `DeprecationWarning`) and will be removed from the inductive `ComBat` in v3.0.0. Longitudinal ComBat is a whole-cohort harmonizer whose benefit is in-sample, so its home is now `combatlearn.transductive.TransductiveComBat(method="longitudinal")`. The algorithm below is unchanged; only the entry point moves. See [Transductive ComBat](#transductive-combat-whole-cohort-harmonization).
+```
+
 ComBat for repeated-measures / longitudinal designs, where the same subjects are measured more than once (e.g. across visits or time points). It extends the Fortin model with a per-subject **random intercept** - a subject-specific offset shared across that subject's repeated measurements - so within-subject correlation is accounted for when estimating batch effects rather than being treated as independent noise.
 
 As in the other methods, `batch` is still the technical batch you want to remove (e.g. scanner or site); what makes a design *longitudinal* is that the same subjects recur, identified by `subject_id`.
@@ -268,6 +272,94 @@ X_corrected = combat.fit_transform(X)
 ❌ A smooth term needs enough distinct values to support `spline_df` (raises otherwise)
 ❌ Slightly more parameters to estimate than the linear Fortin/Chen models
 
+## NestedComBat (Nested / OPNested / GMM ComBat)
+
+**Reference**: Horng et al. (2022)
+
+The methods above take a single batch variable. When several technical variables need harmonizing at once - for example **site**, **scanner**, and **protocol** - concatenating them into one batch variable creates many tiny groups and unstable estimates. `NestedComBat` instead applies single-batch ComBat to each variable **in sequence**, feeding the output of one step into the next. It is a separate scikit-learn transformer (not a `method=` option), and it is inductive and cross-validation-safe like `ComBat`: the harmonization order, the optional Gaussian-mixture grouping, and every per-step parameter are learned on the training data and frozen for transform.
+
+### When to Use
+
+- More than one batch variable to remove (site + scanner + protocol, ...)
+- You want the composition to preserve covariates across every step
+- You suspect a latent (unlabeled) grouping in the data that a Gaussian mixture can recover
+
+### Algorithm
+
+1. (Optional, `optimize_order=True`) Try harmonization orders and keep the one that leaves the fewest features with a significant residual batch effect (Anderson-Darling k-sample test, summed over all batch variables). The search is exhaustive over all `k!` orderings up to `max_exhaustive_vars` (default 4); above the cap it warns and falls back to greedy forward selection.
+2. Apply single-batch ComBat to each batch variable in the chosen order, each step delegating to a `ComBatModel` with the configured `method` (`"fortin"`/`"chen"`/`"gam"`/`"covbat_gam"`), preserving the discrete/continuous covariates.
+3. (Optional, `gmm`) Fit a 2-component Gaussian mixture per feature (unbalanced splits filtered by `gmm_min_cluster_frac`, best feature by AIC) and feed its latent grouping in as an extra batch variable (`gmm="batch"`, `+GMM`) or a protected covariate (`gmm="covariate"`, `-GMM`).
+
+### Example
+
+```python
+import pandas as pd
+from combatlearn import NestedComBat
+
+# One column per batch variable
+batch = pd.DataFrame({"site": site, "scanner": scanner, "protocol": protocol})
+
+nested = NestedComBat(
+    batch=batch,
+    continuous_covariates=age,
+    discrete_covariates=sex,
+    method="fortin",       # per-step engine
+    optimize_order=True,   # OPNested order optimization
+    max_exhaustive_vars=4, # exhaustive up to 4 variables, else greedy
+    gmm=None,              # or "batch" (+GMM) / "covariate" (-GMM)
+)
+X_corrected = nested.fit_transform(X)
+print(nested.order_)  # the chosen harmonization order
+```
+
+With `reference_batch`, pass a `{batch_variable: level}` dict so each step keeps its own reference level unchanged (a bare string is accepted only when there is a single batch variable).
+
+### Advantages
+
+✅ Harmonizes several batch variables without exploding them into tiny groups
+✅ Composes with the Fortin, CovBat, and GAM engines and preserves covariates across steps
+✅ Order optimization targets the residual batch effect directly
+✅ Inductive and cross-validation-safe, like `ComBat`
+
+### Limitations
+
+❌ Only the covariate-aware engines are allowed (`johnson`/`longitudinal` are not)
+❌ The exhaustive order search is factorial; large numbers of batch variables fall back to greedy
+❌ The Gaussian-mixture grouping needs a balanced two-cluster split to be added
+
+## Transductive ComBat (Whole-Cohort Harmonization)
+
+Some ComBat variants only pay off **in-sample**: their benefit is tied to the samples present at fit time, so there is no leakage-free way to freeze them on a training split and apply them to held-out data. These live in `combatlearn.transductive.TransductiveComBat`, a single class with a `method=` selector (mirroring `ComBat`), used as a one-shot `fit_transform` over a complete cohort. Calling `transform` on separate held-out data raises, and it is deliberately not a `Pipeline` step.
+
+Currently `method="longitudinal"` (Longitudinal ComBat, Beer et al. 2020) is available; the algorithm is exactly the one described under [Longitudinal Method](#longitudinal-method-longitudinal-combat).
+
+```{note}
+"Transductive" here follows scikit-learn's glossary sense: a method that "is designed to model a specific dataset, but not to apply that model to unseen data" - i.e. whole-cohort, non-inductive, `fit_transform`-only. It is *not* the strictly supervised Vapnik sense of transduction (predicting labels for specific unlabeled points): ComBat is unsupervised and predicts no labels.
+```
+
+### Example
+
+```python
+from combatlearn.transductive import TransductiveComBat
+
+harmonizer = TransductiveComBat(
+    batch=batch,
+    method="longitudinal",
+    subject_id=subject,         # required: one label per sample
+    time_covariate=time,        # optional
+    continuous_covariates=age,  # optional
+    discrete_covariates=sex,    # optional
+)
+X_corrected = harmonizer.fit_transform(X)  # whole cohort, one pass
+```
+
+### When to Use
+
+- Harmonizing a **complete** repeated-measures cohort in one pass for downstream (typically group-level) analysis
+- You do not need to apply the frozen correction to new, unseen samples
+
+For cross-validated prediction that must generalize to **new subjects**, use the inductive `ComBat` (e.g. `method="fortin"`) instead.
+
 ## Parametric vs Non-Parametric
 
 All methods support both parametric and non-parametric empirical Bayes:
@@ -322,11 +414,12 @@ Samples in the reference batch remain unchanged after correction.
 
 **Simple Decision Tree**:
 
-1. **Harmonising a complete repeated-measures cohort in-sample?** → Use Longitudinal (for cross-validated prediction on *new* subjects, use Fortin)
-2. **No covariates?** → Use Johnson
-3. **A continuous covariate has a nonlinear effect (e.g. age)?** → Use GAM (`gam`, or `covbat_gam` for high dimensionality)
-4. **Have covariates + low/normal dimensionality?** → Use Fortin
-5. **Have covariates + high dimensionality?** → Use Chen
+1. **Several batch variables to remove (site + scanner + ...)?** → Use `NestedComBat` (with any of the engines below as its per-step `method`)
+2. **Harmonising a complete repeated-measures cohort in-sample?** → Use `TransductiveComBat(method="longitudinal")` (for cross-validated prediction on *new* subjects, use Fortin)
+3. **No covariates?** → Use Johnson
+4. **A continuous covariate has a nonlinear effect (e.g. age)?** → Use GAM (`gam`, or `covbat_gam` for high dimensionality)
+5. **Have covariates + low/normal dimensionality?** → Use Fortin
+6. **Have covariates + high dimensionality?** → Use Chen
 
 ## Next Steps
 

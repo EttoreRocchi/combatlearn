@@ -75,16 +75,17 @@ def _create_static_plot(
         ax1 = fig.add_subplot(121, projection="3d")
         ax2 = fig.add_subplot(122, projection="3d")
 
-    scatter_kwargs = {
-        "batch_labels": batch_labels,
-        "unique_batches": unique_batches,
-        "colors": colors,
-        "n_components": n_components,
-        "point_size": point_size,
-        "alpha": alpha,
-    }
-    _scatter_panel(ax1, X_orig, **scatter_kwargs)
-    _scatter_panel(ax2, X_trans, **scatter_kwargs)
+    for ax, X in ((ax1, X_orig), (ax2, X_trans)):
+        _scatter_panel(
+            ax,
+            X,
+            batch_labels,
+            unique_batches,
+            colors,
+            n_components,
+            point_size,
+            alpha,
+        )
 
     method_upper = method.upper()
     for ax, label in [(ax1, "Before"), (ax2, "After")]:

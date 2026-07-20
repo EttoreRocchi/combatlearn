@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=61", "wheel"]
+requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -8,7 +8,8 @@ dynamic = ["version", "dependencies", "optional-dependencies"]
 description = "Batch-effect harmonization for machine learning frameworks."
 authors = [{name="Ettore Rocchi", email="ettoreroc@gmail.com"}]
 requires-python = ">=3.10"
-license = {text = "MIT"}
+license = "MIT"
+license-files = ["LICENSE"]
 readme = {file="README.md", content-type="text/markdown"}
 keywords = [
     "machine-learning",
@@ -17,10 +18,14 @@ keywords = [
     "preprocessing",
 ]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 4 - Beta",
     "Intended Audience :: Science/Research",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
 ]
 
 [tool.setuptools.packages.find]

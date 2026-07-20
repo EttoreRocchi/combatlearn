@@ -3,6 +3,25 @@
 All notable changes to combatlearn are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.3.0] - 2026-07-20
+
+### Added
+
+- **NestedComBat** (`combatlearn.NestedComBat`): scikit-learn transformer that harmonizes **multiple** batch variables at once (e.g. site, scanner, protocol) by applying ComBat to each in sequence (Nested / OPNested / GMM ComBat, _Horng et al._ 2022). Inductive and cross-validation-safe like `ComBat`.
+  - Per-step engine via `method` (`"fortin"`/`"chen"`/`"gam"`/`"covbat_gam"`); covariates are preserved across steps.
+  - `optimize_order=True` chooses the harmonization order that minimizes the residual batch effect (exhaustive up to `max_exhaustive_vars`, greedy above).
+  - `gmm="batch"`/`"covariate"` adds a latent Gaussian-mixture grouping, either harmonized away or preserved as a covariate.
+- **`combatlearn.transductive.TransductiveComBat`** (`method="longitudinal"`): whole-cohort, `fit_transform`-only harmonizer for corrections that are realized in-sample; not a `Pipeline` step.
+- **`combatlearn.inspection.batch_variance_explained(combat, X)`**: fraction of total variance explained by batch after correcting `X`, computed on demand. `summary` gains an optional `X` argument that appends the post-correction value to the report.
+
+### Changed
+
+- **`ComBat.transform` is now side-effect-free**: it no longer writes the `_batch_var_after_` diagnostic attribute. Use `combatlearn.inspection.batch_variance_explained(combat, X)` (or `summary(combat, X)`) instead.
+
+### Deprecated
+
+- **`method="longitudinal"` on the inductive `ComBat`** now emits a `DeprecationWarning` pointing to `combatlearn.transductive.TransductiveComBat(method="longitudinal")`. It keeps working through the 2.x line and will be removed in v3.0.0.
+
 ## [2.2.0] - 2026-07-06
 
 ### Added

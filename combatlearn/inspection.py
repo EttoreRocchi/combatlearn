@@ -7,7 +7,10 @@ from typing import TYPE_CHECKING, Literal
 import numpy as np
 import pandas as pd
 
+from ._utils import _subset
+
 if TYPE_CHECKING:
+    from .core import ArrayLike
     from .sklearn_api import ComBat
 
 
@@ -105,7 +108,7 @@ def feature_batch_diagnostics(
         scale = scale / scale_sum if scale_sum > 0 else scale
         combined = combined / combined_sum if combined_sum > 0 else combined
 
-    return pd.DataFrame(
+    result: pd.DataFrame = pd.DataFrame(
         {
             "location": location,
             "scale": scale,
@@ -113,15 +116,59 @@ def feature_batch_diagnostics(
         },
         index=feature_names,
     ).sort_values("combined", ascending=False)
+    return result
 
 
-def summary(combat: ComBat) -> str:
+def batch_variance_explained(combat: ComBat, X: ArrayLike) -> float:
+    """Fraction of total variance explained by batch after correcting ``X``.
+
+    Transforms ``X`` with the fitted model and measures the residual between-batch
+    signal (between-batch sum of squares over total sum of squares). Compare it
+    against ``combat._batch_var_before_`` (recorded at fit on the training data)
+    to gauge how much batch structure the correction removed. Computed on demand,
+    so :meth:`combatlearn.ComBat.transform` stays free of diagnostic side effects.
+
+    Parameters
+    ----------
+    combat : ComBat
+        A fitted ``ComBat`` instance.
+    X : array-like of shape (n_samples, n_features)
+        Data to correct and score. It must align with ``combat.batch`` exactly as
+        for :meth:`~combatlearn.ComBat.transform` (a shared pandas index, or a
+        matching length for arrays).
+
+    Returns
+    -------
+    float
+        Fraction in ``[0, 1]`` of total variance explained by batch after
+        correction; lower means less residual batch structure.
+
+    Raises
+    ------
+    ValueError
+        If the model is not fitted.
+    """
+    if not hasattr(combat, "_model") or not hasattr(combat._model, "_gamma_star"):
+        raise ValueError(
+            "This ComBat instance is not fitted yet. Call 'fit' before 'batch_variance_explained'."
+        )
+    idx = X.index if isinstance(X, pd.DataFrame) else pd.RangeIndex(len(X))
+    batch_vec = _subset(combat.batch, idx)
+    X_after = combat.transform(X)
+    return combat._batch_variance_explained(X_after.values, np.asarray(batch_vec))
+
+
+def summary(combat: ComBat, X: ArrayLike | None = None) -> str:
     """Return a human-readable diagnostic report after fitting.
 
     Parameters
     ----------
     combat : ComBat
         A fitted ``ComBat`` instance.
+    X : array-like of shape (n_samples, n_features), optional
+        If given, the report adds the fraction of variance explained by batch
+        *after* correcting ``X`` (via :func:`batch_variance_explained`). Omit it to
+        report only the pre-correction value recorded at fit.
 
     Returns
     -------
@@ -171,8 +218,9 @@ def summary(combat: ComBat) -> str:
 
     if hasattr(combat, "_batch_var_before_"):
         lines.append(f"{'Batch var. explained (before)':<{col_w}}{combat._batch_var_before_:.1%}")
-    if hasattr(combat, "_batch_var_after_"):
-        lines.append(f"{'Batch var. explained (after)':<{col_w}}{combat._batch_var_after_:.1%}")
+    if X is not None:
+        after = batch_variance_explained(combat, X)
+        lines.append(f"{'Batch var. explained (after)':<{col_w}}{after:.1%}")
 
     design_cond = getattr(combat._model, "_design_cond", None)
     if design_cond is not None:

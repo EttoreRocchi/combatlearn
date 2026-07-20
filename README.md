@@ -12,13 +12,16 @@
 
 **combatlearn** makes the popular _ComBat_ (and _CovBat_) batch-effect correction algorithm available for use into machine learning frameworks. It lets you harmonise high-dimensional data inside a scikit-learn `Pipeline`, so that cross-validation and grid-search automatically take batch structure into account, **without data leakage**.
 
-**Six methods**:
+**Inductive `ComBat` methods** (fit on train, apply to held-out data, cross-validation-safe):
 - `method="johnson"` - classic ComBat (Johnson _et al._, 2007)
 - `method="fortin"` - neuroComBat (Fortin _et al._, 2018)
 - `method="chen"` - CovBat (Chen _et al._, 2022)
-- `method="longitudinal"` - Longitudinal ComBat for repeated measures (Beer _et al._, 2020)
 - `method="gam"` - ComBat-GAM, nonlinear (spline) covariate effects (Pomponio _et al._, 2020)
 - `method="covbat_gam"` - CovBat with the same nonlinear covariate modeling
+
+**Multiple batch variables** - `NestedComBat` harmonizes over several batch variables at once (e.g. site, scanner, protocol) with optional order optimization and Gaussian-mixture grouping (Nested / OPNested / GMM ComBat, Horng _et al._, 2022).
+
+**Whole-cohort (transductive)** - `combatlearn.transductive.TransductiveComBat(method="longitudinal")` for repeated-measures / longitudinal designs (Beer _et al._, 2020), used as a one-shot `fit_transform`. (`ComBat(method="longitudinal")` still works but is deprecated in favor of this and will be removed in v3.0.0.)
 
 ## Installation
 
@@ -83,6 +86,28 @@ print(f"Best CV AUROC: {grid.best_score_:.3f}")
 
 For a full example of how to use **combatlearn** see the [notebook demo](https://github.com/EttoreRocchi/combatlearn/blob/main/docs/source/demo/combatlearn_demo.ipynb)
 
+## Multiple batch variables (`NestedComBat`)
+
+When more than one technical variable needs harmonizing, `NestedComBat` applies ComBat to each in sequence. It picks the harmonization order that minimizes the residual batch effect, and can optionally add a latent Gaussian-mixture grouping. It is inductive and fits inside a `Pipeline` just like `ComBat`.
+
+```python
+import pandas as pd
+from combatlearn import NestedComBat
+
+batch = pd.DataFrame({"site": site, "scanner": scanner})  # one column per batch variable
+
+nested = NestedComBat(
+    batch=batch,
+    continuous_covariates=age,
+    discrete_covariates=diag,
+    method="fortin",      # per-step engine: "fortin"/"chen"/"gam"/"covbat_gam"
+    optimize_order=True,  # choose the order (OPNested)
+    gmm=None,             # or "batch" (+GMM) / "covariate" (-GMM)
+)
+X_corrected = nested.fit_transform(X)
+print("Harmonization order:", nested.order_)
+```
+
 ## `ComBat` parameters
 
 The following section provides a detailed explanation of all parameters available in the scikit-learn-compatible `ComBat` class. For complete API documentation, see the [API Reference](https://combatlearn.readthedocs.io/en/latest/api/).
@@ -101,7 +126,7 @@ The following section provides a detailed explanation of all parameters availabl
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
-| `method` | str | `"johnson"` | ComBat method to use: <ul><li>`"johnson"` - Classical ComBat (_Johnson et al. 2007_)</li><li>`"fortin"` - ComBat with covariates (_Fortin et al. 2018_)</li><li>`"chen"` - CovBat, PCA-based correction (_Chen et al. 2022_)</li><li>`"longitudinal"` - Longitudinal ComBat with a per-subject random intercept (_Beer et al. 2020_)</li><li>`"gam"` - ComBat-GAM, nonlinear (spline) covariates (_Pomponio et al. 2020_)</li><li>`"covbat_gam"` - CovBat with the same nonlinear covariate modeling</li></ul> Case- and separator-insensitive literature aliases are also accepted (e.g. `"covbat"`, `"neurocombat"`, `"combat_gam"`). |
+| `method` | str | `"johnson"` | ComBat method to use: <ul><li>`"johnson"` - Classical ComBat (_Johnson et al. 2007_)</li><li>`"fortin"` - ComBat with covariates (_Fortin et al. 2018_)</li><li>`"chen"` - CovBat, PCA-based correction (_Chen et al. 2022_)</li><li>`"longitudinal"` - Longitudinal ComBat with a per-subject random intercept (_Beer et al. 2020_); **deprecated**, use `combatlearn.transductive.TransductiveComBat`</li><li>`"gam"` - ComBat-GAM, nonlinear (spline) covariates (_Pomponio et al. 2020_)</li><li>`"covbat_gam"` - CovBat with the same nonlinear covariate modeling</li></ul> Case- and separator-insensitive literature aliases are also accepted (e.g. `"covbat"`, `"neurocombat"`, `"combat_gam"`). |
 | `parametric` | bool | `True` | Whether to use the **parametric empirical Bayes** formulation. If `False`, a non-parametric iterative scheme is used. |
 | `mean_only` | bool | `False` | If `True`, only the **mean** is corrected, while variances are left unchanged. Useful for preserving variance structure in the data. |
 | `reference_batch` | str or `None` | `None` | If specified, acts as a reference batch - other batches will be corrected to match this one. |

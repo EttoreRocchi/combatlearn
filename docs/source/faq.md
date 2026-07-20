@@ -109,13 +109,13 @@ For `method="longitudinal"`, unseen *subjects* are handled gracefully: a subject
 
 ## How do I interpret the `summary()` output?
 
-After fitting, call `summary(combat)` (from `combatlearn.inspection`) for a diagnostic report. Key sections:
+After fitting, call `summary(combat)` (from `combatlearn.inspection`) for a diagnostic report. Pass `summary(combat, X)` to also report the batch variance explained *after* correcting `X` (equivalently, call `batch_variance_explained(combat, X)` for that number alone). Key sections:
 
 - **Method/Parametric/Mean only**: Confirms your configuration.
 - **Samples per batch**: Check for small or imbalanced batches.
 - **Top 5 features by batch effect**: Features most affected by batch - useful for quality control.
 - **Diagnostics table**:
-  - **Batch var. explained (before/after)**: Fraction of total variance explained by batch. Should decrease substantially after correction.
+  - **Batch var. explained (before/after)**: Fraction of total variance explained by batch. Should decrease substantially after correction. The after value appears only when you pass `X` to `summary`.
   - **Design matrix condition number**: Large values (>100) suggest collinearity issues (Fortin/Chen/Longitudinal only).
   - **EB convergence**: Whether the iterative estimation converged for each batch.
 

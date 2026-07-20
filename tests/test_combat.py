@@ -469,6 +469,41 @@ def test_collinear_covariate_warns():
         ).fit(X)
 
 
+def test_numpy_x_shorter_than_batch_raises():
+    """A numpy X shorter than the construction-time batch errors clearly (the CV footgun)."""
+    X, batch = simulate_data(n_samples=60, n_features=10)
+    cb = ComBat(batch=batch, method="johnson")
+    X_fold = np.asarray(X)[:30]  # positional subset, as a CV splitter would produce
+    with pytest.raises(ValueError, match="positionally"):
+        cb.fit(X_fold)
+
+
+def test_numpy_x_and_batch_same_length_ok():
+    """Numpy X with a same-length numpy batch aligns positionally and fits fine."""
+    X, batch = simulate_data(n_samples=60, n_features=10)
+    out = ComBat(batch=np.asarray(batch), method="johnson").fit_transform(np.asarray(X))
+    assert out.shape == (60, 10)
+    assert np.isfinite(out.values).all()
+
+
+def test_cross_val_score_numpy_raises_clear_error():
+    """cross_val_score over numpy X + numpy batch surfaces a clear length error, not a crash."""
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.model_selection import cross_val_score
+
+    X, batch = simulate_data(n_samples=60, n_features=10)
+    rng = np.random.default_rng(0)
+    y = rng.integers(0, 2, size=60)
+    pipe = Pipeline(
+        [
+            ("combat", ComBat(batch=np.asarray(batch), method="johnson")),
+            ("clf", LogisticRegression()),
+        ]
+    )
+    with pytest.raises(ValueError, match="positionally"):
+        cross_val_score(pipe, np.asarray(X), y, cv=3, error_score="raise")
+
+
 def test_balanced_batches_no_imbalance_warning():
     """Balanced batches should not trigger imbalance warning."""
     X, batch = simulate_data()

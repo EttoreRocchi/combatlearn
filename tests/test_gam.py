@@ -296,3 +296,22 @@ def test_gam_no_spurious_warnings_on_clean_data():
     with warnings.catch_warnings():
         warnings.simplefilter("error")
         ComBat(batch=batch, continuous_covariates=cont, method="gam").fit_transform(X)
+
+
+@pytest.mark.parametrize("method", ["gam", "covbat_gam"])
+def test_gam_collinear_covariate_warns(method):
+    """The rank check runs on the actual spline-expanded design of the GAM engines.
+
+    A discrete covariate that duplicates the batch labels is collinear with the
+    batch indicators inside the fitted least-squares design, so fitting must warn
+    even though the continuous (splined) covariate itself is well behaved.
+    """
+    X, batch, cont, _ = simulate_gam_data(confound=False, random_state=0)
+    disc_collinear = batch.to_frame("cov")
+    with pytest.warns(UserWarning, match="rank-deficient"):
+        ComBat(
+            batch=batch,
+            continuous_covariates=cont,
+            discrete_covariates=disc_collinear,
+            method=method,
+        ).fit(X)

@@ -1,7 +1,8 @@
 # Minimal makefile for Sphinx documentation
 
+PYTHON        ?= python
 SPHINXOPTS    ?=
-SPHINXBUILD   ?= sphinx-build
+SPHINXBUILD   ?= $(PYTHON) -m sphinx
 SOURCEDIR     = source
 BUILDDIR      = _build
 

@@ -154,6 +154,9 @@ class ComBatModel:
         self._smooth_cols: list[Any]
         self._smooth_knots: dict[Any, FloatArray]
         self._smooth_basis_columns: dict[Any, list[str]]
+        self._design_cond: float | None
+        self._design_rank: int | None
+        self._design_ncols: int | None
 
         # Validate spline parameters (used by the gam / covbat_gam methods)
         if self.spline_degree < 1:
@@ -341,41 +344,20 @@ class ComBatModel:
         delta_hat_arr = np.vstack(delta_hat)
 
         b_names = [str(lvl) for lvl in self._batch_levels]
-        if self.mean_only:
-            gamma_star = self._shrink_gamma(
-                gamma_hat_arr,
-                delta_hat_arr,
-                n_per_batch,
-                parametric=self.parametric,
-                batch_names=b_names,
-            )
-            delta_star = np.ones_like(delta_hat_arr)
-        else:
-            gamma_star, delta_star = self._shrink_gamma_delta(
-                gamma_hat_arr,
-                delta_hat_arr,
-                n_per_batch,
-                parametric=self.parametric,
-                batch_names=b_names,
-            )
-
-        if self.reference_batch is not None:
-            ref_idx = list(self._batch_levels).index(self.reference_batch)
-            gamma_ref = gamma_star[ref_idx]
-            delta_ref = delta_star[ref_idx]
-            gamma_star = gamma_star - gamma_ref
-            if not self.mean_only:
-                delta_star = delta_star / delta_ref
-            self._reference_batch_idx = ref_idx
-        else:
-            self._reference_batch_idx = None
+        gamma_star, delta_star = self._shrink_eb(gamma_hat_arr, delta_hat_arr, n_per_batch, b_names)
+        gamma_star, delta_star, self._reference_batch_idx = self._apply_reference_shift(
+            gamma_star, delta_star, self._batch_levels
+        )
 
         self._grand_mean = grand_mean
         self._pooled_var = pooled_var
         self._gamma_star = gamma_star
         self._delta_star = delta_star
         self._n_per_batch = n_per_batch
-        self._design_cond: float | None = None
+        self._design_cond = None
+        # Johnson uses no covariate design, so there is no rank-deficiency check.
+        self._design_rank = None
+        self._design_ncols = None
 
     def _is_gam(self) -> bool:
         """Whether the resolved method models smooth terms with B-splines."""
@@ -552,6 +534,10 @@ class ComBatModel:
         design = design_df.values
         self._design_cond = float(la.cond(design))
         p_design = design.shape[1]
+        # Rank of the actual least-squares design (spline columns included for the
+        # GAM engines), so the rank-deficiency check reflects the design truly used.
+        self._design_rank = int(la.matrix_rank(design))
+        self._design_ncols = p_design
 
         X_np = X.values
         beta_hat = la.lstsq(design, X_np, rcond=None)[0]
@@ -592,24 +578,9 @@ class ComBatModel:
         )
 
         b_names = [str(lvl) for lvl in self._batch_levels]
-        if self.mean_only:
-            gamma_star = self._shrink_gamma(
-                gamma_hat,
-                delta_hat,
-                n_per_batch,
-                parametric=self.parametric,
-                batch_names=b_names,
-            )
-            delta_star = np.ones_like(delta_hat)
-        else:
-            gamma_star, delta_star = self._shrink_gamma_delta(
-                gamma_hat,
-                delta_hat,
-                n_per_batch,
-                parametric=self.parametric,
-                batch_names=b_names,
-            )
+        gamma_star, delta_star = self._shrink_eb(gamma_hat, delta_hat, n_per_batch, b_names)
 
+        # The reference batch is left unchanged: its parameters are pinned to (0, 1).
         if ref_idx is not None:
             gamma_star[ref_idx] = 0.0
             if not self.mean_only:
@@ -668,31 +639,11 @@ class ComBatModel:
         delta_hat_arr = np.vstack(delta_hat)
 
         b_names = [str(lvl) for lvl in self._batch_levels_pc]
-        if self.mean_only:
-            gamma_star = self._shrink_gamma(
-                gamma_hat_arr,
-                delta_hat_arr,
-                n_per_batch,
-                parametric=self.parametric,
-                batch_names=b_names,
-            )
-            delta_star = np.ones_like(delta_hat_arr)
-        else:
-            gamma_star, delta_star = self._shrink_gamma_delta(
-                gamma_hat_arr,
-                delta_hat_arr,
-                n_per_batch,
-                parametric=self.parametric,
-                batch_names=b_names,
-            )
+        gamma_star, delta_star = self._shrink_eb(gamma_hat_arr, delta_hat_arr, n_per_batch, b_names)
 
-        if self.reference_batch is not None:
-            ref_idx = list(self._batch_levels_pc).index(self.reference_batch)
-            gamma_ref = gamma_star[ref_idx]
-            delta_ref = delta_star[ref_idx]
-            gamma_star = gamma_star - gamma_ref
-            if not self.mean_only:
-                delta_star = delta_star / delta_ref
+        gamma_star, delta_star, _ = self._apply_reference_shift(
+            gamma_star, delta_star, self._batch_levels_pc
+        )
 
         self._pc_gamma_star = gamma_star
         self._pc_delta_star = delta_star
@@ -770,6 +721,8 @@ class ComBatModel:
         time = self._to_df(time_covariate, X.index, "time_covariate")
         design, self._nonbatch_columns = self._build_longitudinal_design(X, batch, disc, cont, time)
         self._design_cond = float(la.cond(design)) if design.shape[1] else 1.0
+        self._design_rank = int(la.matrix_rank(design)) if design.shape[1] else None
+        self._design_ncols = design.shape[1] if design.shape[1] else None
         self._n_batch = n_batch
         self._p_design = design.shape[1]
 
@@ -812,34 +765,10 @@ class ComBatModel:
         )
 
         b_names = [str(lvl) for lvl in self._batch_levels]
-        if self.mean_only:
-            gamma_star = self._shrink_gamma(
-                gamma_hat,
-                delta_hat,
-                n_per_batch_arr,
-                parametric=self.parametric,
-                batch_names=b_names,
-            )
-            delta_star = np.ones_like(delta_hat)
-        else:
-            gamma_star, delta_star = self._shrink_gamma_delta(
-                gamma_hat,
-                delta_hat,
-                n_per_batch_arr,
-                parametric=self.parametric,
-                batch_names=b_names,
-            )
-
-        if self.reference_batch is not None:
-            ref_idx = list(self._batch_levels).index(self.reference_batch)
-            gamma_ref = gamma_star[ref_idx]
-            delta_ref = delta_star[ref_idx]
-            gamma_star = gamma_star - gamma_ref
-            if not self.mean_only:
-                delta_star = delta_star / delta_ref
-            self._reference_batch_idx = ref_idx
-        else:
-            self._reference_batch_idx = None
+        gamma_star, delta_star = self._shrink_eb(gamma_hat, delta_hat, n_per_batch_arr, b_names)
+        gamma_star, delta_star, self._reference_batch_idx = self._apply_reference_shift(
+            gamma_star, delta_star, self._batch_levels
+        )
 
         self._gamma_star = gamma_star
         self._delta_star = delta_star
@@ -1050,6 +979,63 @@ class ComBatModel:
             batch_names=batch_names,
         )
         return gamma
+
+    def _shrink_eb(
+        self,
+        gamma_hat: FloatArray,
+        delta_hat: FloatArray,
+        n_per_batch: dict[str, int] | FloatArray,
+        batch_names: list[str],
+    ) -> tuple[FloatArray, FloatArray]:
+        """Empirical-Bayes shrinkage honoring ``mean_only`` (returns gamma*, delta*).
+
+        Shared by every ``_fit_*`` engine: in ``mean_only`` mode only the location
+        (gamma) is shrunk and delta* is fixed to ones; otherwise both location and
+        scale posteriors are estimated.
+        """
+        if self.mean_only:
+            gamma_star = self._shrink_gamma(
+                gamma_hat,
+                delta_hat,
+                n_per_batch,
+                parametric=self.parametric,
+                batch_names=batch_names,
+            )
+            delta_star = np.ones_like(delta_hat)
+        else:
+            gamma_star, delta_star = self._shrink_gamma_delta(
+                gamma_hat,
+                delta_hat,
+                n_per_batch,
+                parametric=self.parametric,
+                batch_names=batch_names,
+            )
+        return gamma_star, delta_star
+
+    def _apply_reference_shift(
+        self,
+        gamma_star: FloatArray,
+        delta_star: FloatArray,
+        batch_levels: pd.Index,
+    ) -> tuple[FloatArray, FloatArray, int | None]:
+        """Re-express gamma*/delta* relative to the reference batch.
+
+        Used by the johnson, chen, and longitudinal engines: the reference batch's
+        location is subtracted from every gamma* and (unless ``mean_only``) its
+        scale divides every delta*, so the reference level maps to (0, 1) and the
+        others are expressed relative to it. Returns the shifted arrays and the
+        reference index (``None`` when no reference batch is set).
+
+        Fortin bakes the reference directly into the design matrix instead (its
+        reference dummy is set to 1), so it does not use this helper.
+        """
+        if self.reference_batch is None:
+            return gamma_star, delta_star, None
+        ref_idx = list(batch_levels).index(self.reference_batch)
+        gamma_star = gamma_star - gamma_star[ref_idx]
+        if not self.mean_only:
+            delta_star = delta_star / delta_star[ref_idx]
+        return gamma_star, delta_star, ref_idx
 
     def transform(
         self,

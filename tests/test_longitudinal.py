@@ -64,10 +64,11 @@ def test_longitudinal_parametric_flag(parametric):
 
 def test_longitudinal_reduces_batch_variance():
     """Harmonization should reduce the fraction of variance explained by batch."""
+    from combatlearn.inspection import batch_variance_explained
+
     X, kwargs = _fit_kwargs()
     cb = ComBat(**kwargs).fit(X)
-    cb.transform(X)
-    assert cb._batch_var_after_ < cb._batch_var_before_
+    assert batch_variance_explained(cb, X) < cb._batch_var_before_
 
 
 def test_longitudinal_requires_subject_id():

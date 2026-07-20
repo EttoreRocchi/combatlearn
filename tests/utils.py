@@ -118,6 +118,53 @@ def simulate_covariate_data(random_state=0):
     return X, batch, disc, cont
 
 
+def simulate_nested_data(
+    n_samples=240,
+    n_features=15,
+    n_vars=3,
+    shift=2.5,
+    signal=2.0,
+    latent_split=False,
+    random_state=0,
+):
+    """Multi-batch data with an additive shift per batch variable, for NestedComBat.
+
+    Returns ``(X, batch, disc, cont)`` where ``batch`` is a DataFrame with one column
+    per batch variable (site, scanner, protocol), each contributing its own additive
+    batch effect (with a distinct per-feature loading), over a shared continuous
+    covariate (age) signal to preserve. With ``latent_split=True`` a hidden bimodal
+    grouping is injected into every feature, so a per-feature Gaussian mixture (GMM
+    ComBat) has a real grouping to recover.
+    """
+    rng = np.random.default_rng(random_state)
+    names = ["site", "scanner", "protocol"][:n_vars]
+    levels = {"site": ["S1", "S2"], "scanner": ["GE", "SI", "PH"], "protocol": ["P1", "P2"]}
+
+    total_shift = np.zeros((n_samples, n_features))
+    batch_cols = {}
+    for name in names:
+        assign = rng.choice(levels[name], n_samples)
+        batch_cols[name] = assign
+        shift_map = {lvl: rng.uniform(-shift, shift) for lvl in levels[name]}
+        per_sample = np.array([shift_map[a] for a in assign])[:, None]
+        total_shift += per_sample * rng.uniform(0.5, 1.5, n_features)
+
+    if latent_split:
+        group = rng.integers(0, 2, n_samples)
+        total_shift += (2.0 * group)[:, None] * rng.uniform(0.5, 1.5, n_features)
+
+    age = rng.uniform(20, 80, n_samples)
+    effect = signal * np.outer((age - 50) / 30, rng.uniform(0.5, 1.5, n_features))
+    noise = rng.standard_normal((n_samples, n_features))
+
+    X = pd.DataFrame(effect + noise + total_shift, columns=[f"feat_{i}" for i in range(n_features)])
+    idx = X.index
+    batch = pd.DataFrame({k: pd.Series(v, index=idx) for k, v in batch_cols.items()})
+    disc = pd.DataFrame({"sex": rng.choice(["M", "F"], n_samples)}, index=idx)
+    cont = pd.DataFrame({"age": age}, index=idx)
+    return X, batch, disc, cont
+
+
 def simulate_longitudinal_data(
     n_subjects=40, n_times=3, n_features=20, shift=3.0, re_sd=1.5, random_state=0
 ):
