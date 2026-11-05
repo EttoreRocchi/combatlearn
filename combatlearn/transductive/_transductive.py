@@ -39,10 +39,10 @@ class TransductiveComBat(BaseEstimator, TransformerMixin):  # type: ignore[misc]
     ----------
     batch : array-like of shape (n_samples,)
         Batch labels for each sample.
-    method : {'seq', 'met', 'longitudinal'}
-        Whole-cohort engine to use. Required, since the engines take disjoint
+    method : {'seq', 'met', 'longitudinal'}, default='longitudinal'
+        Whole-cohort engine to use. Pass it explicitly: the engines take disjoint
         arguments (``condition`` for ``'seq'``/``'met'``, ``subject_id`` for
-        ``'longitudinal'``).
+        ``'longitudinal'``), and the default goes with ``'longitudinal'`` in v3.0.0.
 
         * ``'seq'`` - condition-protected ComBat-seq (*Zhang, Parmigiani &
           Johnson* 2020) for RNA-seq counts, i.e. the upstream ``full_mod=TRUE``
@@ -95,7 +95,7 @@ class TransductiveComBat(BaseEstimator, TransformerMixin):  # type: ignore[misc]
         self,
         batch: ArrayLike,
         *,
-        method: str,
+        method: str = "longitudinal",
         condition: ArrayLike | None = None,
         discrete_covariates: ArrayLike | None = None,
         continuous_covariates: ArrayLike | None = None,

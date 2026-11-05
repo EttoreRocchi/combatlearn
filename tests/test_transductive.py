@@ -112,11 +112,13 @@ def test_clone_get_params():
     assert np.isfinite(out.values).all()
 
 
-def test_method_is_required():
-    """``method`` has no default and must be given."""
-    _, batch, condition = _counts()
-    with pytest.raises(TypeError, match="method"):
-        TransductiveComBat(batch=batch, condition=condition)
+def test_method_defaults_to_the_deprecated_longitudinal_engine():
+    """Without ``method`` the 2.3.0 default still runs and warns toward LongitudinalComBat."""
+    X, kwargs = _cohort()
+    kwargs.pop("method")
+    with pytest.warns(DeprecationWarning, match="LongitudinalComBat"):
+        out = TransductiveComBat(**kwargs).fit_transform(X)
+    assert np.isfinite(out.values).all()
 
 
 @pytest.mark.parametrize("method", ["seq", "met"])

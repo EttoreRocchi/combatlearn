@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2.4.0] - 2026-XX-XX
+## [2.4.0] - 2026-11-05
 
 ### Added
 
@@ -21,7 +21,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Longitudinal ComBat is inductive**: cross-validation-safe like `ComBat`, provided both the batch and the subject were seen at fit; otherwise it falls back to the population correction.
 - **`combatlearn.transductive`** holds only the configurations that protect a condition of interest, which cannot be frozen at fit.
-- **`TransductiveComBat` requires `method`** (previously defaulted to `"longitudinal"`); longitudinal calls should migrate to `combatlearn.LongitudinalComBat`.
 - **The `ComBat(method="longitudinal")` deprecation** now points to `combatlearn.LongitudinalComBat`.
 - **`ComBat(method="seq"/"met")`** raises and points to `GLMComBat`.
 - **A discrete covariate that determines `y` warns at `fit`** on `ComBat`, `LongitudinalComBat`, `NestedComBat` and `GLMComBat`, pointing to `TransductiveComBat`.
@@ -45,7 +44,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **CovBat no longer discards part of held-out samples** when there are fewer training samples than features.
 - **CovBat no longer distorts held-out samples** when `covbat_cov_thresh` asks for more PCs than the training data support.
 - **`covbat_cov_thresh=1.0` no longer raises.**
-- **`reference_batch` maps every other batch onto the reference batch's mean and variance** with `johnson`, `longitudinal` and `chen`, also when batch scales differ or the reference batch is small.
+- **`reference_batch` maps every other batch onto the reference batch's mean and variance** with `johnson`, `longitudinal`, `chen` and `covbat_gam`, also when batch scales differ or the reference batch is small.
 - **Discrete covariates are coded with the levels seen at fit** on `ComBat`, `LongitudinalComBat` and `NestedComBat`, so held-out samples are coded as the training data.
 - **A discrete covariate level not seen at fit raises at `transform`** on `ComBat`, `LongitudinalComBat`, `NestedComBat` and `GLMComBat`, including values of another type (such as 0/1 for True/False) and categories absent from the training rows.
 - **Null batch labels and covariates raise at `fit` and `transform`** on `ComBat`, `LongitudinalComBat`, `NestedComBat` and `GLMComBat`.
@@ -74,7 +73,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **ComBat-GAM** (`method="gam"`) and **CovBat-GAM** (`method="covbat_gam"`): continuous covariates modeled nonlinearly with B-splines (_Pomponio et al._ 2020). Inductive and cross-validation-safe like `fortin` / `chen`.
-- New parameters on `ComBat`: `smooth_terms` (covariates to smooth; default all), `spline_df` (default 10), `spline_degree` (default 3) and `smooth_term_bounds` (optional per-term range).
+- **New parameters on `ComBat`**: `smooth_terms` (covariates to smooth; default all), `spline_df` (default 10), `spline_degree` (default 3) and `smooth_term_bounds` (optional per-term range).
 - **`layout="diverging"`** on `plot_feature_diagnostics(kind="combined")`: location and scale as back-to-back bars with separate axes. The default stays `layout="grouped"`.
 
 ### Changed
