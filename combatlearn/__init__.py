@@ -1,5 +1,6 @@
-from .sklearn_api import ComBat, NestedComBat
+from .glm import GLMComBat
+from .sklearn_api import ComBat, LongitudinalComBat, NestedComBat
 
-__all__ = ["ComBat", "NestedComBat"]
-__version__ = "2.3.0"
+__all__ = ["ComBat", "GLMComBat", "LongitudinalComBat", "NestedComBat"]
+__version__ = "2.4.0"
 __author__ = "Ettore Rocchi"

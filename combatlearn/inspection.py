@@ -21,12 +21,11 @@ def feature_batch_diagnostics(
 ) -> pd.DataFrame:
     """Compute per-feature batch effect magnitude.
 
-    Returns a DataFrame with columns ``location``, ``scale``, and
-    ``combined``. Location is the (weighted) RMS of gamma across batches
-    (standardized mean shifts). Scale is the (weighted) RMS of log-delta
-    across batches (log-fold variance change). Combined is the Euclidean
-    norm sqrt(location**2 + scale**2). Using RMS provides L2-consistent
-    aggregation; using log(delta) ensures symmetry.
+    Location is the (weighted) RMS of gamma across batches (standardized mean
+    shifts). Scale is the (weighted) RMS of log-delta across batches (log-fold
+    variance change; zero when ``mean_only=True``). Combined is the Euclidean
+    norm sqrt(location**2 + scale**2). RMS gives L2-consistent aggregation and
+    log(delta) makes scale shifts symmetric.
 
     Parameters
     ----------
@@ -41,10 +40,8 @@ def feature_batch_diagnostics(
           Note: normalization is applied independently to each column, so the
           Euclidean relationship (combined**2 = location**2 + scale**2) no longer holds.
     weighted : bool, default=True
-        If True, compute a weighted RMS where each batch is weighted by its
-        sample size. This gives more influence to larger batches, producing
-        a more statistically representative summary. If False, all batches
-        contribute equally regardless of size.
+        If True, weight each batch by its sample size in the RMS. If False, all
+        batches contribute equally regardless of size.
 
     Returns
     -------
@@ -70,36 +67,29 @@ def feature_batch_diagnostics(
     delta_star = combat._model._delta_star
 
     if weighted:
-        # Batch sample sizes as weights, normalized to sum to 1
         n_per_batch = combat._model._n_per_batch
         weights = np.array(
             [n_per_batch[str(lvl)] for lvl in combat._model._batch_levels], dtype=np.float64
         )
         weights = weights / weights.sum()
 
-        # Location effect: weighted RMS of gamma across batches
         location = np.sqrt((weights[:, np.newaxis] * gamma_star**2).sum(axis=0))
 
-        # Scale effect: weighted RMS of log(delta) across batches
         if not combat.mean_only:
             scale = np.sqrt((weights[:, np.newaxis] * np.log(delta_star) ** 2).sum(axis=0))
         else:
             scale = np.zeros_like(location)
     else:
-        # Location effect: unweighted RMS of gamma across batches
         location = np.sqrt((gamma_star**2).mean(axis=0))
 
-        # Scale effect: unweighted RMS of log(delta) across batches
         if not combat.mean_only:
             scale = np.sqrt((np.log(delta_star) ** 2).mean(axis=0))
         else:
             scale = np.zeros_like(location)
 
-    # Euclidean to treat location and scale as orthogonal dimensions
     combined = np.sqrt(location**2 + scale**2)
 
     if mode == "distribution":
-        # Normalize each column independently to sum to 1
         location_sum = location.sum()
         scale_sum = scale.sum()
         combined_sum = combined.sum()
@@ -125,8 +115,7 @@ def batch_variance_explained(combat: ComBat, X: ArrayLike) -> float:
     Transforms ``X`` with the fitted model and measures the residual between-batch
     signal (between-batch sum of squares over total sum of squares). Compare it
     against ``combat._batch_var_before_`` (recorded at fit on the training data)
-    to gauge how much batch structure the correction removed. Computed on demand,
-    so :meth:`combatlearn.ComBat.transform` stays free of diagnostic side effects.
+    to gauge how much batch structure the correction removed.
 
     Parameters
     ----------
@@ -208,7 +197,6 @@ def summary(combat: ComBat, X: ArrayLike | None = None) -> str:
     for feat, row in top5.iterrows():
         lines.append(f"  {feat}: {row['combined']:.4f}")
 
-    # Diagnostics table
     lines.append("")
     lines.append("Diagnostics")
     lines.append("=" * 40)
@@ -232,7 +220,9 @@ def summary(combat: ComBat, X: ArrayLike | None = None) -> str:
         lines.append(f"EB convergence ({eb_type}):")
         for info in conv_info:
             batch_name = info["batch"]
-            if info["converged"]:
+            if info.get("closed_form"):
+                status = "closed form"
+            elif info["converged"]:
                 status = f"converged ({info['iterations']} iter)"
             else:
                 max_change = max(info["final_gamma_change"], info["final_delta_change"])

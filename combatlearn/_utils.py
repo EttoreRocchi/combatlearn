@@ -2,12 +2,38 @@
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Iterable
+from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
 
-from .core import ArrayLike
+if TYPE_CHECKING:
+    from .core import ArrayLike
+
+
+def _fit_levels(values: pd.Series) -> pd.Index:
+    """Levels a discrete covariate takes in the fitted rows (unused categories dropped)."""
+    levels: pd.Index = pd.Index(pd.Categorical(values).remove_unused_categories().categories)
+    return levels
+
+
+def _code_levels(values: pd.Series, levels: pd.Index, label: str) -> pd.Categorical:
+    """Code values against the levels frozen at fit; a level not seen at fit raises.
+
+    Dummy coding would otherwise turn it into an all-zero row, silently the reference level.
+    """
+    codes = levels.get_indexer(pd.Index(values))
+    unseen = pd.unique(values[(codes == -1) & values.notna().to_numpy()])
+    if len(unseen):
+        raise ValueError(
+            f"{label} has level(s) {sorted(map(str, unseen))} that were "
+            f"not seen at fit. A level with no training samples has no estimated covariate "
+            f"effect, so it cannot be corrected; coding it as the reference level would "
+            f"silently apply the wrong one. Seen at fit: {sorted(map(str, levels))}."
+        )
+    return pd.Categorical.from_codes(codes.tolist(), categories=levels)
 
 
 def _check_positional_alignment(
@@ -15,25 +41,8 @@ def _check_positional_alignment(
 ) -> None:
     """Require length-matched auxiliaries when ``X`` carries no index labels.
 
-    ``batch`` and the covariates are supplied at construction and label-aligned to
-    ``X`` via its pandas index. When ``X`` is a plain array it has no labels, so the
-    only possible alignment is positional, which needs equal lengths. This most
-    often breaks inside cross-validation: the CV splitter subsets ``X`` positionally
-    while the construction-time ``batch``/covariates stay full-length, and the
-    silent length mismatch would otherwise surface as a confusing pandas reindexing
-    error. A DataFrame ``X`` label-aligns and is skipped.
-
-    Parameters
-    ----------
-    X : array-like
-        The data passed to ``fit``/``transform``.
-    auxiliaries : iterable of (name, object)
-        The construction-time vectors to check; ``None`` entries are ignored.
-
-    Raises
-    ------
-    ValueError
-        If ``X`` is not a DataFrame and any auxiliary has a different length.
+    A plain-array ``X`` can only align positionally, which breaks inside CV when the
+    splitter subsets ``X`` but construction-time ``batch``/covariates stay full-length.
     """
     if isinstance(X, pd.DataFrame):
         return
@@ -64,3 +73,50 @@ def _subset(obj: ArrayLike | None, idx: pd.Index) -> pd.DataFrame | pd.Series | 
             return pd.Series(obj, index=idx)
         else:
             return pd.DataFrame(obj, index=idx)
+
+
+def _warn_if_covariate_determines_target(
+    y: ArrayLike | None,
+    discrete_covariates: pd.DataFrame | pd.Series | None,
+    *,
+    estimator: str,
+    stacklevel: int = 4,
+) -> None:
+    """Warn when a discrete covariate perfectly determines ``y`` (likely the target).
+
+    Protecting the target inflates cross-validated scores. ``discrete_covariates``
+    must already be subset to the fitted rows; covariates averaging fewer than two
+    samples per level are skipped to avoid false alarms.
+    """
+    if y is None or discrete_covariates is None:
+        return
+
+    target = pd.Series(np.asarray(y).ravel())
+    if len(target) != len(discrete_covariates) or target.nunique(dropna=False) < 2:
+        return
+
+    frame = (
+        discrete_covariates.to_frame()
+        if isinstance(discrete_covariates, pd.Series)
+        else discrete_covariates
+    )
+    n_samples = len(frame)
+    for column in frame.columns:
+        levels = pd.Series(np.asarray(frame[column]))
+        n_levels = levels.nunique(dropna=False)
+        if n_levels < 2 or n_levels * 2 > n_samples:
+            continue
+        if target.groupby(list(levels), dropna=False).nunique(dropna=False).max() > 1:
+            continue
+        warnings.warn(
+            f"{estimator}: discrete covariate {column!r} determines `y` on the training "
+            f"data, so this correction preserves the very signal you are about to predict, "
+            f"and `transform` applies it using each held-out sample's own label - which "
+            f"would not be available at prediction time. Any cross-validated score will be "
+            f"optimistic. If you are harmonizing a whole cohort for differential expression "
+            f"or methylation, use combatlearn.transductive.TransductiveComBat(condition=...), "
+            f"which protects the term and refuses `transform`. If {column!r} is genuinely "
+            f"known at intake and is not your target, this warning does not apply.",
+            UserWarning,
+            stacklevel=stacklevel,
+        )

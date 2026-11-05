@@ -22,7 +22,10 @@ def _recovery_mse(corrected, oracle):
 
 
 def _batch_cov_discrepancy(X, batch):
-    """Mean squared deviation of each batch's covariance from the pooled covariance."""
+    """Mean squared deviation of each batch's covariance from the pooled covariance.
+
+    Divided by the pooled mean squared entry, so shrinking the data cannot lower it.
+    """
     Xc = np.asarray(X, dtype=float)
     Xc = Xc - Xc.mean(axis=0)
     batch = np.asarray(batch)
@@ -30,7 +33,31 @@ def _batch_cov_discrepancy(X, batch):
     total = 0.0
     for lvl in np.unique(batch):
         total += ((np.cov(Xc[batch == lvl], rowvar=False) - pooled) ** 2).mean()
-    return total
+    return total / float((pooled**2).mean())
+
+
+def _within_batch_slope(corrected, batch, oracle):
+    """Mean within-batch least-squares slope of the corrected data on the oracle.
+
+    Scores ~1 unless the harmonizer shrinks the covariate effect.
+    """
+    values = np.asarray(corrected, dtype=float)
+    truth = np.asarray(oracle, dtype=float)
+    b = np.asarray(batch)
+    slopes = []
+    for lvl in np.unique(b):
+        o = truth[b == lvl] - truth[b == lvl].mean(axis=0)
+        z = values[b == lvl] - values[b == lvl].mean(axis=0)
+        slopes.append(((o * z).sum(axis=0) / (o * o).sum(axis=0)).mean())
+    return float(np.mean(slopes))
+
+
+def _pc_variance_gap(resid, batch, pca, n_pc):
+    """Mean |log(batch variance / pooled variance)| of the retained PC scores."""
+    scores = pca.transform(resid)[:, :n_pc]
+    b = np.asarray(batch)
+    per_batch = np.vstack([scores[b == lvl].var(axis=0, ddof=1) for lvl in np.unique(b)])
+    return float(np.abs(np.log(per_batch / per_batch.mean(axis=0))).mean())
 
 
 def _batch_var(X, batch):
@@ -62,8 +89,7 @@ def test_spline_basis_matches_statsmodels(df, degree):
 def test_degree1_linear_spline_basis_is_valid():
     """Degree-1 (piecewise-linear) basis builds a finite, full-rank df-1 design.
 
-    statsmodels cannot construct a degree-1 BSplines basis (it requires a 2nd
-    derivative for its penalty), so this is checked without a parity reference.
+    statsmodels cannot build a degree-1 BSplines basis, so there is no parity reference.
     """
     rng = np.random.default_rng(0)
     x = rng.uniform(20.0, 80.0, 200)
@@ -98,39 +124,68 @@ def test_gam_recovers_nonlinear_effect_better_than_fortin(seed):
     mse_fortin = _recovery_mse(fortin.values, oracle)
     mse_gam = _recovery_mse(gam.values, oracle)
     assert mse_gam < mse_fortin
-    assert mse_gam < 1.0  # gam essentially recovers the batch-free signal
+    assert mse_gam < 1.0
 
 
 @pytest.mark.parametrize("seed", [0, 1, 2])
 def test_covbat_gam_harmonizes_batch_covariance(seed):
-    """covbat_gam engages the covariance step: it retains >1 PC and removes the
-    batch-covariance effect the Fortin mean/variance step leaves behind.
+    """covbat_gam harmonizes the retained PC-score variances and keeps the total variance.
 
-    The data carries a genuine per-batch covariance difference that is independent of
-    age, so CovBat has real work to do beyond the spline mean model. It is not compared
-    on signal-recovery MSE because the covariance step legitimately moves data off any
-    additive oracle; the spline mean-model benefit itself is covered by the ``gam`` test.
+    The full covariance improves less, as the simulated effect is not diagonal in the PC basis.
     """
     X, batch, cont = simulate_covbat_data(random_state=seed)
     est = ComBat(batch=batch, continuous_covariates=cont, method="covbat_gam").fit(X)
-    assert est._model._covbat_n_pc >= 2  # covariance harmonization actually runs
+    model = est._model
+    assert model._covbat_n_pc >= 2
 
     covbat_gam = est.transform(X)
+    gam = ComBat(batch=batch, continuous_covariates=cont, method="gam").fit_transform(X)
     chen = ComBat(batch=batch, continuous_covariates=cont, method="chen").fit_transform(X)
-    fortin = ComBat(batch=batch, continuous_covariates=cont, method="fortin").fit_transform(X)
 
     assert np.isfinite(covbat_gam.values).all()
-    assert not np.allclose(covbat_gam.values, chen.values)  # spline mean model differs
+    assert not np.allclose(covbat_gam.values, chen.values)
 
-    # CovBat drives the residual batch-covariance discrepancy far below Fortin's.
-    assert _batch_cov_discrepancy(covbat_gam, batch) < 0.1 * _batch_cov_discrepancy(fortin, batch)
+    # covbat_gam shares gam's Fortin-GAM step, so this is gam's residual.
+    resid_gam, stand_mu = model._fortin_residuals(X, batch.astype("category"), None, cont)
+    resid_covbat = covbat_gam.to_numpy() - stand_mu
+    pca, n_pc = model._covbat_pca, model._covbat_n_pc
+    assert _pc_variance_gap(resid_covbat, batch, pca, n_pc) < 0.4 * _pc_variance_gap(
+        resid_gam, batch, pca, n_pc
+    )
+    assert _batch_cov_discrepancy(covbat_gam, batch) < _batch_cov_discrepancy(gam, batch)
+    assert covbat_gam.var().sum() == pytest.approx(gam.var().sum(), rel=0.1)
 
 
-def test_covbat_gam_single_pc_warns_on_rank1_data():
-    """A single dominant direction collapses CovBat to one PC, and covbat_gam says so."""
+def test_covbat_gam_keeps_the_nonlinear_covariate_effect():
+    """covbat_gam keeps the protected spline age effect that gam keeps.
+
+    The age effect is nonlinear and confounded with batch (batches are age tertiles).
+    """
+    X, batch, cont, oracle = simulate_gam_data(random_state=0)
+    kwargs = {"batch": batch, "continuous_covariates": cont}
+    gam = ComBat(method="gam", **kwargs).fit_transform(X)
+    covbat_gam = ComBat(method="covbat_gam", **kwargs).fit_transform(X)
+
+    gam_slope = _within_batch_slope(gam, batch, oracle)
+    covbat_slope = _within_batch_slope(covbat_gam, batch, oracle)
+    assert covbat_slope >= 0.9 * gam_slope, (
+        f"covbat_gam within-batch slope {covbat_slope:.3f} < 0.9 x gam {gam_slope:.3f}"
+    )
+
+
+def test_covbat_gam_single_pc_warns_on_rank1_residual():
+    """covbat_gam warns when one dominant residual direction leaves a single PC.
+
+    Age is removed before the PCA, so the rank-1 factor must be independent of age.
+    """
     X, batch, cont, _ = simulate_gam_data(random_state=0)
-    with pytest.warns(UserWarning, match="single principal component"):
-        ComBat(batch=batch, continuous_covariates=cont, method="covbat_gam").fit(X)
+    age_only = ComBat(batch=batch, continuous_covariates=cont, method="covbat_gam").fit(X)
+    assert age_only._model._covbat_n_pc >= 2
+
+    rng = np.random.default_rng(1)
+    latent = 5.0 * np.outer(rng.standard_normal(len(X)), rng.uniform(0.5, 1.5, X.shape[1]))
+    with pytest.warns(UserWarning, match="fewer than two principal components"):
+        ComBat(batch=batch, continuous_covariates=cont, method="covbat_gam").fit(X + latent)
 
 
 def test_gam_matches_fortin_on_linear_unconfounded_effect():
@@ -192,12 +247,11 @@ def test_out_of_range_transform_clamps_and_is_finite():
     model = ComBatModel(method="gam").fit(X, batch=batch, continuous_covariates=cont)
 
     cont_oor = cont.copy()
-    cont_oor.iloc[:5, 0] = 500.0  # far above the training range
-    cont_oor.iloc[5:10, 0] = -100.0  # far below
+    cont_oor.iloc[:5, 0] = 500.0
+    cont_oor.iloc[5:10, 0] = -100.0
     out = model.transform(X, batch=batch, continuous_covariates=cont_oor)
     assert np.isfinite(out.values).all()
 
-    # In-range rows are unaffected by the out-of-range rows.
     base = model.transform(X, batch=batch, continuous_covariates=cont)
     np.testing.assert_allclose(out.values[10:], base.values[10:], rtol=1e-8, atol=1e-8)
 
@@ -245,7 +299,7 @@ def test_smooth_terms_subset_leaves_others_linear():
     )
     assert model._smooth_cols == ["age"]
     assert any(c.startswith("age__spline") for c in model._nonbatch_columns)
-    assert "score" in model._nonbatch_columns  # kept linear
+    assert "score" in model._nonbatch_columns
     assert not any(c.startswith("score__spline") for c in model._nonbatch_columns)
 
 
@@ -265,7 +319,7 @@ def test_smooth_term_bounds_inside_data_raises():
             batch=batch,
             continuous_covariates=cont,
             method="gam",
-            smooth_term_bounds=(40.0, 60.0),  # narrower than the [20, 80] data range
+            smooth_term_bounds=(40.0, 60.0),
         ).fit(X)
 
 
@@ -300,12 +354,7 @@ def test_gam_no_spurious_warnings_on_clean_data():
 
 @pytest.mark.parametrize("method", ["gam", "covbat_gam"])
 def test_gam_collinear_covariate_warns(method):
-    """The rank check runs on the actual spline-expanded design of the GAM engines.
-
-    A discrete covariate that duplicates the batch labels is collinear with the
-    batch indicators inside the fitted least-squares design, so fitting must warn
-    even though the continuous (splined) covariate itself is well behaved.
-    """
+    """A covariate duplicating batch triggers the rank warning on the spline-expanded design."""
     X, batch, cont, _ = simulate_gam_data(confound=False, random_state=0)
     disc_collinear = batch.to_frame("cov")
     with pytest.warns(UserWarning, match="rank-deficient"):

@@ -6,3 +6,4 @@ pre-commit>=3.0
 mypy>=1.0
 pandas-stubs
 statsmodels>=0.14
+inmoose>=0.7

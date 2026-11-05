@@ -21,24 +21,33 @@ from ._nested import (
     transform_nested_sequence,
     variance_explained_by_batch,
 )
-from ._utils import _check_positional_alignment, _subset
+from ._utils import (
+    _check_positional_alignment,
+    _subset,
+    _warn_if_covariate_determines_target,
+)
 from .core import ArrayLike, ComBatModel, _resolve_method
 
 
 class ComBat(BaseEstimator, TransformerMixin):  # type: ignore[misc]
     """Pipeline-friendly wrapper around `ComBatModel`.
 
-    Stores batch (and optional covariates) passed at construction and
-    appropriately uses them for separate `fit` and `transform`.
+    Batch labels and covariates are passed at construction and subset to the
+    rows of ``X`` at each `fit` and `transform`.
+
+    .. deprecated:: 2.3.0
+        ``method='longitudinal'`` is deprecated and will be removed in v3.0.0. Use
+        :class:`~combatlearn.LongitudinalComBat`, which takes the same ``subject_id`` and
+        ``time_covariate`` and also supports ``transform``.
 
     Parameters
     ----------
     batch : array-like of shape (n_samples,)
         Batch labels for each sample.
     discrete_covariates : array-like, optional
-        Categorical covariates to protect (Fortin/Chen/Longitudinal only).
+        Categorical covariates to protect (every method except 'johnson').
     continuous_covariates : array-like, optional
-        Continuous covariates to protect (Fortin/Chen/Longitudinal only).
+        Continuous covariates to protect (every method except 'johnson').
     subject_id : array-like, optional
         Subject/individual labels for the random intercept. Required for
         ``method='longitudinal'``, ignored otherwise.
@@ -50,17 +59,20 @@ class ComBat(BaseEstimator, TransformerMixin):  # type: ignore[misc]
         covariates in ``smooth_terms`` nonlinearly with B-splines (ComBat-GAM,
         Pomponio et al. 2020). Literature aliases are also accepted:
         'classic_combat' (johnson), 'neurocombat' (fortin), 'covbat' (chen),
-        'longcombat' (longitudinal), 'combat_gam' (gam).
+        'longcombat' (longitudinal), 'combat_gam' (gam), 'covbatgam' (covbat_gam).
     parametric : bool, default=True
         Use parametric empirical Bayes.
     mean_only : bool, default=False
-        Adjust only the mean (ignore variance).
+        Adjust only the mean (ignore variance). For 'chen'/'covbat_gam' this applies to
+        the ComBat step only; PC-score variances are still harmonized.
     reference_batch : str, optional
         Batch level to leave unchanged.
     eps : float, default=1e-8
         Numerical jitter for stability.
     covbat_cov_thresh : float or int, default=0.9
-        CovBat variance threshold for PCs.
+        CovBat PCs to harmonize: a float in (0, 1] keeps the fewest PCs reaching that
+        cumulative explained variance, an int >= 1 that many PCs. At most the PCs with
+        variance on the training data are kept.
     smooth_terms : list of str or int, optional
         Continuous covariates to model nonlinearly (gam/covbat_gam only).
         Default (None) smooths every continuous covariate.
@@ -127,9 +139,28 @@ class ComBat(BaseEstimator, TransformerMixin):  # type: ignore[misc]
         _check_positional_alignment(X, self._auxiliary_items())
 
         if fitting:
-            batch_ser = (
-                pd.Series(self.batch) if not isinstance(self.batch, pd.Series) else self.batch
+            self._reject_null_inputs(
+                self.batch,
+                subject_id=self.subject_id,
+                discrete_covariates=self.discrete_covariates,
+                continuous_covariates=self.continuous_covariates,
             )
+
+    @staticmethod
+    def _reject_null_inputs(
+        batch: ArrayLike | None,
+        *,
+        subject_id: ArrayLike | None = None,
+        discrete_covariates: ArrayLike | None = None,
+        continuous_covariates: ArrayLike | None = None,
+    ) -> None:
+        """Refuse null labels and covariates.
+
+        A null batch label would get all-zero dummies and be silently corrected
+        as the reference level, so this also runs on the transform subset.
+        """
+        if batch is not None:
+            batch_ser = pd.Series(batch) if not isinstance(batch, pd.Series) else batch
             nan_count = int(batch_ser.isna().sum())
             if nan_count:
                 raise ValueError(
@@ -137,54 +168,46 @@ class ComBat(BaseEstimator, TransformerMixin):  # type: ignore[misc]
                     f"All batch labels must be non-null. Check your data for missing entries."
                 )
 
-            if self.subject_id is not None:
-                subj_ser = (
-                    pd.Series(self.subject_id)
-                    if not isinstance(self.subject_id, pd.Series)
-                    else self.subject_id
+        if subject_id is not None:
+            subj_ser = (
+                pd.Series(subject_id) if not isinstance(subject_id, pd.Series) else subject_id
+            )
+            nan_count = int(subj_ser.isna().sum())
+            if nan_count:
+                raise ValueError(
+                    f"subject_id contains {nan_count} NaN value(s). "
+                    f"All subject labels must be non-null."
                 )
-                nan_count = int(subj_ser.isna().sum())
-                if nan_count:
-                    raise ValueError(
-                        f"subject_id contains {nan_count} NaN value(s). "
-                        f"All subject labels must be non-null."
-                    )
 
-            if self.discrete_covariates is not None:
-                disc_df = (
-                    pd.DataFrame(self.discrete_covariates)
-                    if not isinstance(self.discrete_covariates, pd.Series | pd.DataFrame)
-                    else self.discrete_covariates
+        if discrete_covariates is not None:
+            disc_df = (
+                pd.DataFrame(discrete_covariates)
+                if not isinstance(discrete_covariates, pd.Series | pd.DataFrame)
+                else discrete_covariates
+            )
+            nan_count = int(
+                disc_df.isna().sum().sum()
+                if isinstance(disc_df, pd.DataFrame)
+                else disc_df.isna().sum()
+            )
+            if nan_count:
+                raise ValueError(
+                    f"discrete_covariates contains {nan_count} NaN value(s). "
+                    f"All covariate values must be non-null."
                 )
-                nan_count = int(
-                    disc_df.isna().sum().sum()
-                    if isinstance(disc_df, pd.DataFrame)
-                    else disc_df.isna().sum()
-                )
-                if nan_count:
-                    raise ValueError(
-                        f"discrete_covariates contains {nan_count} NaN value(s). "
-                        f"All covariate values must be non-null."
-                    )
 
-            if self.continuous_covariates is not None:
-                cont_vals: ArrayLike = self.continuous_covariates
-                if isinstance(cont_vals, pd.Series | pd.DataFrame):
-                    cont_vals = cont_vals.values  # type: ignore[assignment]
-                check_array(
-                    np.atleast_2d(cont_vals) if np.asarray(cont_vals).ndim == 1 else cont_vals,
-                    ensure_all_finite=True,
-                    dtype="numeric",
-                )
+        if continuous_covariates is not None:
+            cont_vals: ArrayLike = continuous_covariates
+            if isinstance(cont_vals, pd.Series | pd.DataFrame):
+                cont_vals = cont_vals.values  # type: ignore[assignment]
+            check_array(
+                np.atleast_2d(cont_vals) if np.asarray(cont_vals).ndim == 1 else cont_vals,
+                ensure_all_finite=True,
+                dtype="numeric",
+            )
 
     def _check_data_quality(self, X: pd.DataFrame, batch_ser: pd.Series) -> None:
-        """Issue warnings for data quality issues that may affect results.
-
-        Covariate collinearity is checked separately in :meth:`_warn_rank_deficient`
-        after fitting, from the actual least-squares design (which, for the GAM
-        engines, is the spline basis rather than the raw continuous covariate).
-        """
-        # Near-zero variance features
+        """Warn about near-zero-variance features and highly imbalanced batches."""
         var = X.var(axis=0)
         near_zero = var[var < self._NEAR_ZERO_VAR_THRESH].index.tolist()
         if near_zero:
@@ -199,7 +222,6 @@ class ComBat(BaseEstimator, TransformerMixin):  # type: ignore[misc]
                 stacklevel=3,
             )
 
-        # Highly imbalanced batches
         counts = batch_ser.value_counts()
         ratio = counts.max() / counts.min()
         if ratio > self._IMBALANCE_RATIO_THRESH:
@@ -215,10 +237,7 @@ class ComBat(BaseEstimator, TransformerMixin):  # type: ignore[misc]
     def _warn_rank_deficient(self) -> None:
         """Warn if the fitted least-squares design is rank-deficient.
 
-        Uses the rank of the design actually used by the fitted model, so the
-        check is exact for the covariate-aware engines and, unlike an
-        approximation from the raw continuous covariate, correctly covers the
-        spline basis of the ``gam``/``covbat_gam`` engines.
+        Uses the fitted design itself, so the GAM spline basis is covered too.
         """
         rank = getattr(self._model, "_design_rank", None)
         ncols = getattr(self._model, "_design_ncols", None)
@@ -233,6 +252,28 @@ class ComBat(BaseEstimator, TransformerMixin):  # type: ignore[misc]
             UserWarning,
             stacklevel=3,
         )
+
+    def _maybe_warn_deprecated_method(self) -> None:
+        """Warn that ``method='longitudinal'`` is deprecated on the generic transformer.
+
+        :class:`LongitudinalComBat` overrides this to a no-op.
+        """
+        if _resolve_method(self.method) == "longitudinal":
+            warnings.warn(
+                "method='longitudinal' on the generic ComBat transformer is deprecated and "
+                "will be removed in v3.0.0. Longitudinal ComBat is inductive and now has its "
+                "own transformer: use combatlearn.LongitudinalComBat, which takes the same "
+                "subject_id/time_covariate and keeps the fit/transform contract.",
+                DeprecationWarning,
+                stacklevel=3,
+            )
+
+    def _check_transform_subjects(self, subject_id: pd.DataFrame | pd.Series | None) -> None:
+        """Hook run on the subset ``subject_id`` before a transform.
+
+        No-op here (unseen subjects get a zero random intercept);
+        :class:`LongitudinalComBat` overrides it for ``on_unseen_subject``.
+        """
 
     @staticmethod
     def _batch_variance_explained(X: npt.NDArray[Any], batch_labels: npt.NDArray[Any]) -> float:
@@ -264,16 +305,11 @@ class ComBat(BaseEstimator, TransformerMixin):  # type: ignore[misc]
             Fitted estimator.
         """
         self._validate_inputs(X, fitting=True)
-        if _resolve_method(self.method) == "longitudinal":
-            warnings.warn(
-                "method='longitudinal' on the inductive ComBat transformer is deprecated "
-                "and will be removed in v3.0.0. Longitudinal ComBat is a whole-cohort "
-                "harmonizer; use combatlearn.transductive.TransductiveComBat("
-                "method='longitudinal') instead.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
+        self._maybe_warn_deprecated_method()
         idx = X.index if isinstance(X, pd.DataFrame) else pd.RangeIndex(len(X))
+        _warn_if_covariate_determines_target(
+            y, _subset(self.discrete_covariates, idx), estimator=type(self).__name__
+        )
 
         if isinstance(X, pd.DataFrame):
             self.feature_names_in_ = np.asarray(X.columns, dtype=object)
@@ -341,6 +377,13 @@ class ComBat(BaseEstimator, TransformerMixin):  # type: ignore[misc]
         cont = _subset(self.continuous_covariates, idx)
         subj = _subset(self.subject_id, idx)
         time = _subset(self.time_covariate, idx)
+        self._reject_null_inputs(
+            batch_vec,
+            subject_id=subj,
+            discrete_covariates=disc,
+            continuous_covariates=cont,
+        )
+        self._check_transform_subjects(subj)
         X_transformed = self._model.transform(
             X,
             batch=batch_vec,  # type: ignore[arg-type]
@@ -373,15 +416,176 @@ class ComBat(BaseEstimator, TransformerMixin):  # type: ignore[misc]
         return self.feature_names_in_
 
 
+class LongitudinalComBat(ComBat):
+    """Inductive Longitudinal ComBat for repeated-measures designs.
+
+    Empirical-Bayes harmonization of residual mean and variance inside a linear
+    mixed-effects model with a per-subject **random intercept** (*Beer et al.* 2020,
+    doi:10.1016/j.neuroimage.2020.117129). The fixed effects are fit by REML and
+    each subject's random intercept (BLUP) enters the standardization mean; the
+    rest follows the Fortin path. ``batch`` is the technical variable to remove
+    (scanner, site) and ``subject_id`` identifies the subjects that recur.
+
+    The transformer is **inductive**: the fixed effects, the pooled variance, the
+    per-batch ``gamma_star``/``delta_star`` and each subject's BLUP are estimated
+    at ``fit`` and frozen, so ``transform`` uses no information from the data it
+    is applied to. Unlike :class:`ComBat`, which needs the **batch** to have been
+    seen at fit, it needs the **batch and the subject**; subjects unseen at fit
+    are handled by ``on_unseen_subject``.
+
+    Parameters
+    ----------
+    batch : array-like of shape (n_samples,)
+        Batch labels for each sample.
+    subject_id : array-like of shape (n_samples,)
+        Subject/individual labels driving the random intercept. Required: one
+        label per sample, repeated across that subject's measurements.
+    time_covariate : array-like, optional
+        Continuous time variable added to the fixed-effects design to model the
+        within-subject trajectory.
+    discrete_covariates : array-like, optional
+        Categorical covariates to protect.
+    continuous_covariates : array-like, optional
+        Continuous covariates to protect.
+    parametric : bool, default=True
+        Use parametric empirical Bayes.
+    mean_only : bool, default=False
+        Adjust only the mean (ignore variance).
+    reference_batch : str, optional
+        Batch level to leave unchanged.
+    eps : float, default=1e-8
+        Numerical jitter for stability.
+    on_unseen_subject : {'population', 'error'}, default='population'
+        What ``transform`` does with a subject absent from the training data.
+        ``'population'`` uses a zero random intercept - the empirical-Bayes
+        posterior mean for a subject with no observations - so the correction
+        reduces to the population (Fortin-equivalent) one for that sample.
+        ``'error'`` raises a ``ValueError`` listing the unseen subjects instead,
+        for pipelines that must guarantee the full precondition holds.
+
+    Notes
+    -----
+    How this estimator behaves under cross-validation depends on the split:
+
+    1. **A new subject** (subject-wise CV, e.g. ``GroupKFold`` on ``subject_id``,
+       the clinically valid split). The BLUP is zero, so there is **no advantage
+       over** ``ComBat(method='fortin')`` and harmonization can even be marginally
+       worse: the scale parameters were calibrated on subject-centred residuals.
+       Prefer Fortin for prediction that must generalize to new subjects.
+    2. **A returning subject at a new timepoint, with no held-out set**
+       (deployment / incremental harmonization). The frozen BLUP is used and new
+       samples are corrected against a frozen reference cohort without
+       re-correcting the existing data, as in iComBat (*Tomo & Nakaki* 2025,
+       doi:10.1016/j.csbj.2025.09.014).
+    3. **Record-wise CV** (one subject's visits split across train and test). The
+       transform is still leakage-free, but the *benchmark* is invalid:
+       record-wise CV overestimates accuracy through subject-identity confounding
+       (*Saeb et al.* 2017, doi:10.1093/gigascience/gix019), with or without a
+       harmonizer in the pipeline.
+
+    The harmonizer never leaks in any of these cases: subject *j*'s BLUP is
+    estimated from *j*'s training visits only and frozen at fit. Its inductive
+    value is incremental harmonization, not cross-validation.
+    """
+
+    _ON_UNSEEN_SUBJECT: frozenset[str] = frozenset({"population", "error"})
+    _MAX_LISTED_SUBJECTS: int = 10
+
+    def __init__(
+        self,
+        batch: ArrayLike,
+        subject_id: ArrayLike,
+        *,
+        time_covariate: ArrayLike | None = None,
+        discrete_covariates: ArrayLike | None = None,
+        continuous_covariates: ArrayLike | None = None,
+        parametric: bool = True,
+        mean_only: bool = False,
+        reference_batch: str | None = None,
+        eps: float = 1e-8,
+        on_unseen_subject: str = "population",
+    ) -> None:
+        super().__init__(
+            batch,
+            discrete_covariates=discrete_covariates,
+            continuous_covariates=continuous_covariates,
+            subject_id=subject_id,
+            time_covariate=time_covariate,
+            method="longitudinal",
+            parametric=parametric,
+            mean_only=mean_only,
+            reference_batch=reference_batch,
+            eps=eps,
+        )
+        self.on_unseen_subject = on_unseen_subject
+
+    def _maybe_warn_deprecated_method(self) -> None:
+        """No deprecation: this class is the supported home of Longitudinal ComBat."""
+
+    def _check_on_unseen_subject(self) -> str:
+        """Validate and return the ``on_unseen_subject`` policy."""
+        if self.on_unseen_subject not in self._ON_UNSEEN_SUBJECT:
+            raise ValueError(
+                f"on_unseen_subject={self.on_unseen_subject!r} is not recognized. Expected "
+                f"{sorted(self._ON_UNSEEN_SUBJECT)}: 'population' corrects subjects unseen at "
+                f"fit with a zero random intercept, 'error' raises instead."
+            )
+        return self.on_unseen_subject
+
+    def _check_transform_subjects(self, subject_id: pd.DataFrame | pd.Series | None) -> None:
+        """Enforce the ``on_unseen_subject='error'`` policy at transform time."""
+        if self._check_on_unseen_subject() != "error" or subject_id is None:
+            return
+        known = set(self._model._re_subject_levels)
+        unseen = [
+            s for s in dict.fromkeys(np.asarray(subject_id).ravel().tolist()) if s not in known
+        ]
+        if not unseen:
+            return
+        shown = unseen[: self._MAX_LISTED_SUBJECTS]
+        suffix = f", ... ({len(unseen)} total)" if len(unseen) > len(shown) else ""
+        raise ValueError(
+            f"{len(unseen)} subject(s) were not seen at fit: {shown}{suffix}. "
+            f"LongitudinalComBat requires both the batch and the subject to be present at "
+            f"fit time when on_unseen_subject='error'. Pass on_unseen_subject='population' "
+            f"to correct these samples with a zero random intercept instead, or refit with "
+            f"these subjects included."
+        )
+
+    def fit(self, X: ArrayLike, y: ArrayLike | None = None) -> LongitudinalComBat:
+        """Fit the longitudinal model on the training data.
+
+        Parameters
+        ----------
+        X : array-like of shape (n_samples, n_features)
+            Input data to fit.
+        y : None
+            Ignored. Present for API compatibility.
+
+        Returns
+        -------
+        self : LongitudinalComBat
+            Fitted estimator.
+        """
+        self._check_on_unseen_subject()
+        if self.subject_id is None:
+            raise ValueError(
+                "LongitudinalComBat requires `subject_id` (one label per sample identifying "
+                "the subject/individual used for the random intercept). For a design without "
+                "repeated measures, use combatlearn.ComBat(method='fortin') instead."
+            )
+        super().fit(X, y)
+        return self
+
+
 class NestedComBat(BaseEstimator, TransformerMixin):  # type: ignore[misc]
     """Nested / OPNested / GMM ComBat for multiple batch variables.
 
-    Harmonizes over several batch variables at once (e.g. site, scanner,
-    protocol; *Horng et al.* 2022) by applying single-batch ComBat to each one in
-    sequence, every step delegating to a :class:`~combatlearn.core.ComBatModel`.
-    It adds no new empirical-Bayes math - the chosen order, the optional
-    Gaussian-mixture grouping, and every per-step parameter are learned on the
-    training data and frozen for transform, so it is inductive and
+    Harmonizes several batch variables (e.g. site, scanner, protocol;
+    *Horng et al.* 2022) by applying single-batch ComBat
+    (:class:`~combatlearn.core.ComBatModel`) to each one in sequence. The order,
+    the optional Gaussian-mixture grouping and every per-step parameter are
+    learned at fit and frozen for transform, so it is inductive and
     cross-validation-safe like :class:`ComBat`.
 
     Parameters
@@ -410,11 +614,10 @@ class NestedComBat(BaseEstimator, TransformerMixin):  # type: ignore[misc]
         all batch variables (lower is better).
     max_exhaustive_vars : int, default=4
         Cap on the exhaustive order search. With ``k <= max_exhaustive_vars``
-        batch variables all ``k!`` orderings are tried (each ordering fits ``k``
-        ComBat models and scores every feature), so the cost grows factorially; a
-        warning reports the number of fits before a large exhaustive search runs.
-        Above the cap the search falls back to greedy forward selection. Raise this
-        to force the exhaustive search over more variables, at your own cost.
+        batch variables all ``k!`` orderings are tried (``k`` ComBat fits each), so
+        the cost grows factorially; a warning reports the number of fits before a
+        large exhaustive search runs. Above the cap the search falls back to greedy
+        forward selection.
     gmm : {None, 'batch', 'covariate'}, default=None
         Optional Gaussian-mixture grouping (GMM ComBat). ``'batch'`` (``+GMM``)
         feeds the latent grouping in as an extra batch variable (harmonized away);
@@ -426,7 +629,8 @@ class NestedComBat(BaseEstimator, TransformerMixin):  # type: ignore[misc]
     parametric : bool, default=True
         Use parametric empirical Bayes (passed to every step).
     mean_only : bool, default=False
-        Adjust only the mean (passed to every step).
+        Adjust only the mean (passed to every step). For 'chen'/'covbat_gam' this applies
+        to the ComBat step only; PC-score variances are still harmonized.
     reference_batch : dict or str, optional
         Reference level per batch variable, as a ``{batch_variable: level}`` dict
         (each nested step leaves its reference level unchanged; variables absent
@@ -637,6 +841,9 @@ class NestedComBat(BaseEstimator, TransformerMixin):  # type: ignore[misc]
             )
 
         idx = X.index if isinstance(X, pd.DataFrame) else pd.RangeIndex(len(X))
+        _warn_if_covariate_determines_target(
+            y, _subset(self.discrete_covariates, idx), estimator=type(self).__name__
+        )
         if isinstance(X, pd.DataFrame):
             self.feature_names_in_ = np.asarray(X.columns, dtype=object)
             X_df = X
@@ -649,6 +856,7 @@ class NestedComBat(BaseEstimator, TransformerMixin):  # type: ignore[misc]
         batch_vars = self._resolve_batch_vars(idx)
         disc_df = self._as_frame(_subset(self.discrete_covariates, idx))
         cont_df = self._as_frame(_subset(self.continuous_covariates, idx))
+        ComBat._reject_null_inputs(None, discrete_covariates=disc_df, continuous_covariates=cont_df)
 
         self._gmm_grouping = None
         if self.gmm is not None:
@@ -675,7 +883,7 @@ class NestedComBat(BaseEstimator, TransformerMixin):  # type: ignore[misc]
                             f"with the GMM grouping. Rename it before using gmm='batch'."
                         )
                     batch_vars[GMM_VAR_NAME] = labels
-                else:  # 'covariate'
+                else:
                     gmm_cov = labels.to_frame(GMM_VAR_NAME)
                     if disc_df is not None and GMM_VAR_NAME in disc_df.columns:
                         raise ValueError(
@@ -744,12 +952,13 @@ class NestedComBat(BaseEstimator, TransformerMixin):  # type: ignore[misc]
         batch_vars = self._resolve_batch_vars(idx)
         disc_df = self._as_frame(_subset(self.discrete_covariates, idx))
         cont_df = self._as_frame(_subset(self.continuous_covariates, idx))
+        ComBat._reject_null_inputs(None, discrete_covariates=disc_df, continuous_covariates=cont_df)
 
         if self._gmm_grouping is not None:
             labels = self._gmm_grouping.assign(X_df)
             if self.gmm == "batch":
                 batch_vars[GMM_VAR_NAME] = labels
-            else:  # 'covariate'
+            else:
                 gmm_cov = labels.to_frame(GMM_VAR_NAME)
                 disc_df = gmm_cov if disc_df is None else pd.concat([disc_df, gmm_cov], axis=1)
 

@@ -15,14 +15,18 @@
 
 ## Features
 
-- **Six ComBat Methods**:
+- **Five `ComBat` Methods**:
   - `method="johnson"` - Classic ComBat (Johnson et al., 2007)
   - `method="fortin"` - neuroCombat with covariates (Fortin et al., 2018)
   - `method="chen"` - CovBat PCA-based (Chen et al., 2022)
-  - `method="longitudinal"` - Longitudinal ComBat for repeated measures (Beer et al., 2020)
   - `method="gam"` - ComBat-GAM, nonlinear (spline) covariate effects (Pomponio et al., 2020)
   - `method="covbat_gam"` - CovBat with the same nonlinear covariate modeling
   - Each accepts case- and separator-insensitive literature aliases (e.g. `"covbat"`, `"neurocombat"`, `"combat_gam"`)
+
+- **Dedicated Inductive Estimators**:
+  - `NestedComBat` - several batch variables at once, with order optimization and Gaussian-mixture grouping (Horng et al., 2022)
+  - `LongitudinalComBat` - repeated measures with a per-subject random intercept (Beer et al., 2020). Supersedes the deprecated `method="longitudinal"`
+  - `GLMComBat` - non-Gaussian data: `method="seq"` for RNA-seq counts (ComBat-seq, Zhang et al., 2020) and `method="met"` for methylation beta-values (ComBat-met, Wang, 2025). A parametric GLM plus a strictly per-observation quantile map, so unlike every published implementation of either method it is cross-validation-safe
 
 - **Scikit-learn Compatible**:
   - Works seamlessly in `Pipeline` objects
@@ -121,6 +125,10 @@ Please consider citing the original papers:
 - [**Longitudinal ComBat**](https://github.com/jcbeer/longCombat) - Beer JC et al. _Neuroimage_. 2020. doi: [10.1016/j.neuroimage.2020.117129](https://doi.org/10.1016/j.neuroimage.2020.117129)
 
 - [**ComBat-GAM**](https://github.com/rpomponio/neuroHarmonize) - Pomponio R et al. _Neuroimage_. 2020. doi: [10.1016/j.neuroimage.2019.116450](https://doi.org/10.1016/j.neuroimage.2019.116450)
+
+- [**ComBat-seq**](https://github.com/zhangyuqing/ComBat-seq) - Zhang Y, Parmigiani G, Johnson WE. _NAR Genom Bioinform_. 2020. doi: [10.1093/nargab/lqaa078](https://doi.org/10.1093/nargab/lqaa078)
+
+- [**ComBat-met**](https://github.com/JmWangBio/ComBatMet) - Wang J. _NAR Genom Bioinform_. 2025. doi: [10.1093/nargab/lqaf062](https://doi.org/10.1093/nargab/lqaf062)
 
 ## Author
 

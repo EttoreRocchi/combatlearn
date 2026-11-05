@@ -1,13 +1,11 @@
 """Transductive (whole-cohort) harmonizers.
 
-This tier holds one-shot harmonizers that do not meet the inductive
-fit/transform contract - their benefit is realized in-sample, so they are used
-as ``fit_transform`` on a complete cohort rather than fit on train and applied
-to held-out data. They are deliberately not scikit-learn ``Pipeline`` steps.
-
-Methods are exposed through a single :class:`TransductiveComBat` class with a
-``method=`` selector (mirroring the inductive :class:`~combatlearn.ComBat`), so
-new transductive engines are added as new ``method=`` values.
+A method lands here when a condition-of-interest term is protected in the design,
+which is unavailable at transform time: it runs as ``fit_transform`` on a complete
+cohort and is not a scikit-learn ``Pipeline`` step. :class:`TransductiveComBat`
+offers ``method='seq'`` and ``'met'`` (upstream ``full_mod=TRUE``, ``condition``
+required). ``method='longitudinal'`` is deprecated since v2.4.0 and will be removed
+in v3.0.0; use :class:`~combatlearn.LongitudinalComBat`.
 """
 
 from ._transductive import TransductiveComBat

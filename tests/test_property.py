@@ -1,23 +1,6 @@
-"""Property-based tests (Hypothesis) for the ComBat estimators.
+"""Property-based (Hypothesis) tests of the invariants every ComBat estimator must hold.
 
-These complement the example-based suites: instead of fixed fixtures they
-generate many valid configurations - varying dimensions, batch composition,
-covariates, and hyper-parameters - and assert the invariants that must hold for
-*every* input:
-
-* shape, index, and column names are preserved,
-* no NaN/Inf is introduced,
-* the correction is deterministic (same input -> same output),
-* ``fit(X).transform(X)`` equals ``fit_transform(X)`` for the inductive estimators,
-* reference-batch samples come out untouched,
-* the ``NestedComBat`` order is always a permutation of the batch variables,
-* ``TransductiveComBat`` is ``fit_transform``-only (``transform`` always raises).
-
-The generators only ever produce *valid* data (every batch level has at least a
-few samples), so any exception raised inside ``fit``/``transform`` is a genuine
-failure, not a bad-input artefact. Benign fit-time warnings (imbalance,
-near-zero variance, rank-deficiency on small random draws) are silenced so the
-tests stay focused on the invariants above.
+Generators produce only valid data, so any exception is a real failure; fit warnings are silenced.
 """
 
 from __future__ import annotations
@@ -30,7 +13,8 @@ import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
-from combatlearn import ComBat, NestedComBat
+from combatlearn import ComBat, GLMComBat, LongitudinalComBat, NestedComBat
+from combatlearn.glm._model import GLMComBatModel
 from combatlearn.transductive import TransductiveComBat
 
 _SETTINGS = settings(
@@ -52,13 +36,9 @@ def _assert_core_invariants(X: pd.DataFrame, out: pd.DataFrame) -> None:
 
 @st.composite
 def combat_data(draw, *, with_covariates: bool = False):
-    """A valid single-batch ComBat scenario.
+    """Draw ``(X, batch, discrete, continuous)`` with 2-4 batches and an additive batch shift.
 
-    Draws the number of batches, per-batch sample counts (each comfortably above
-    one, so no batch is degenerate), feature count, and an additive per-batch
-    shift, then builds ``(X, batch, discrete, continuous)``. Covariates are
-    generated independently of the batch labels (so they are not collinear) and,
-    when requested, an age-driven signal is added for the covariate model to fit.
+    Covariates are drawn independently of batch, so they are never collinear with it.
     """
     n_batches = draw(st.integers(min_value=2, max_value=4))
     counts = draw(
@@ -97,14 +77,15 @@ def combat_data(draw, *, with_covariates: bool = False):
 
 
 def _make_combat(method, batch, disc, cont, **extra):
-    """Build a ``ComBat`` for ``method``, passing covariates only when they apply."""
+    """Build a ``ComBat`` for ``method``, passing covariates only when they apply.
+
+    GAM methods use ``spline_df=5``: small draws cannot support the default basis.
+    """
     kwargs = dict(batch=batch, method=method, **extra)
     if method != "johnson":
         kwargs["discrete_covariates"] = disc
         kwargs["continuous_covariates"] = cont
     if method in ("gam", "covbat_gam"):
-        # Small random draws can't support the default df=10 basis; shrink it so
-        # the spline stays well-conditioned regardless of the drawn sample size.
         kwargs.setdefault("spline_df", 5)
     return ComBat(**kwargs)
 
@@ -174,11 +155,7 @@ def _balanced_labels(rng, n, levels, min_count=3):
 
 @st.composite
 def nested_data(draw, *, n_vars: int | None = None):
-    """A valid multi-batch scenario for ``NestedComBat``.
-
-    Builds a batch DataFrame with ``n_vars`` variables (site/scanner/protocol),
-    each level guaranteed a few samples, over a shared age signal to protect.
-    """
+    """A valid ``NestedComBat`` scenario with ``n_vars`` batch variables over an age signal."""
     n = draw(st.integers(min_value=40, max_value=80))
     n_features = draw(st.integers(min_value=3, max_value=6))
     k = n_vars if n_vars is not None else draw(st.integers(min_value=2, max_value=3))
@@ -271,6 +248,65 @@ def longitudinal_data(draw):
 
 @settings(deadline=None, max_examples=25, suppress_health_check=[HealthCheck.too_slow])
 @given(scenario=longitudinal_data())
+def test_property_longitudinal_invariants_and_inductive_contract(scenario):
+    """LongitudinalComBat preserves structure and honours the inductive contract."""
+    X, batch, subject, time = scenario
+    common = {"batch": batch, "subject_id": subject, "time_covariate": time}
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        split = LongitudinalComBat(**common).fit(X).transform(X)
+        joint = LongitudinalComBat(**common).fit_transform(X)
+    _assert_core_invariants(X, split)
+    np.testing.assert_allclose(split.values, joint.values, rtol=1e-10, atol=1e-10)
+
+
+@settings(deadline=None, max_examples=25, suppress_health_check=[HealthCheck.too_slow])
+@given(scenario=longitudinal_data())
+def test_property_longitudinal_blup_reuse_and_unseen_degradation(scenario):
+    """Seen subjects reuse their frozen BLUP; any unseen relabelling gets BLUP 0."""
+    X, batch, subject, time = scenario
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        est = LongitudinalComBat(batch=batch, subject_id=subject, time_covariate=time).fit(X)
+        seen = est.transform(X)
+        est.set_params(subject_id=subject.map("ghost_a_{}".format))
+        unseen_a = est.transform(X)
+        est.set_params(subject_id=subject.map("ghost_b_{}".format))
+        unseen_b = est.transform(X)
+
+    _assert_core_invariants(X, unseen_a)
+    np.testing.assert_array_equal(unseen_a.values, unseen_b.values)
+
+    model = est._model
+    levels = list(model._re_subject_levels)
+    blup_rows = model._re_blup[[levels.index(s) for s in subject]]
+    batch_pos = {lvl: i for i, lvl in enumerate(model._batch_levels)}
+    delta_rows = model._delta_star[[batch_pos[b] for b in batch]]
+    np.testing.assert_allclose(
+        seen.values - unseen_a.values,
+        blup_rows * (1.0 - 1.0 / np.sqrt(delta_rows)),
+        rtol=1e-8,
+        atol=1e-8,
+    )
+
+
+@settings(deadline=None, max_examples=15, suppress_health_check=[HealthCheck.too_slow])
+@given(scenario=longitudinal_data())
+def test_property_longitudinal_on_unseen_subject_error_always_raises(scenario):
+    """``on_unseen_subject='error'`` rejects any relabelled cohort."""
+    X, batch, subject, time = scenario
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        est = LongitudinalComBat(
+            batch=batch, subject_id=subject, time_covariate=time, on_unseen_subject="error"
+        ).fit(X)
+        est.set_params(subject_id=subject.map("ghost_{}".format))
+        with pytest.raises(ValueError, match="were not seen at fit"):
+            est.transform(X)
+
+
+@settings(deadline=None, max_examples=25, suppress_health_check=[HealthCheck.too_slow])
+@given(scenario=longitudinal_data())
 def test_property_transductive_fit_transform_invariants(scenario):
     """Whole-cohort longitudinal harmonization preserves structure and stays finite."""
     X, batch, subject, time = scenario
@@ -292,6 +328,99 @@ def test_property_transductive_transform_always_raises(scenario):
     X, batch, subject, time = scenario
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        est = TransductiveComBat(batch=batch, subject_id=subject, time_covariate=time).fit(X)
+        est = TransductiveComBat(
+            batch=batch,
+            subject_id=subject,
+            time_covariate=time,
+            method="longitudinal",
+        ).fit(X)
     with pytest.raises(NotImplementedError):
         est.transform(X)
+
+
+@st.composite
+def glm_data(draw, *, method: str):
+    """A valid ``GLMComBat`` scenario: NB counts for ``'seq'``, beta-values for ``'met'``.
+
+    At least 6 samples per batch and strictly positive counts keep the engines identifiable.
+    """
+    n_batches = draw(st.integers(min_value=2, max_value=3))
+    n = draw(st.integers(min_value=18, max_value=36))
+    n_features = draw(st.integers(min_value=4, max_value=10))
+    rng = np.random.default_rng(draw(_SEEDS))
+
+    levels = ["A", "B", "C"][:n_batches]
+    labels = _balanced_labels(rng, n, levels, min_count=6)
+    codes = pd.Categorical(labels, categories=levels).codes
+
+    if method == "seq":
+        base = rng.gamma(5.0, 60.0, size=(n_features, 1))
+        effect = np.exp(rng.normal(0.0, 0.5, size=(n_features, n_batches)))
+        mu = base * effect[:, codes]
+        values = rng.negative_binomial(5, 5.0 / (5.0 + mu)) + 1
+        frame = pd.DataFrame(values.T.astype(np.int64))
+    else:
+        centre = rng.normal(0.0, 1.0, size=(n_features, 1))
+        effect = rng.normal(0.0, 0.6, size=(n_features, n_batches))
+        mu = 1.0 / (1.0 + np.exp(-(centre + effect[:, codes])))
+        precision = np.exp(rng.normal(np.log(40.0), 0.3, size=(n_features, 1)))
+        values = rng.beta(mu * precision, (1.0 - mu) * precision)
+        frame = pd.DataFrame(np.clip(values, 1e-4, 1.0 - 1e-4).T)
+
+    frame.columns = [f"f{i}" for i in range(n_features)]
+    return frame, pd.Series(labels, index=frame.index, name="batch")
+
+
+@pytest.mark.parametrize("method", ["seq", "met"])
+@settings(deadline=None, max_examples=15, suppress_health_check=[HealthCheck.too_slow])
+@given(data=st.data())
+def test_property_glm_invariants_and_domain(method, data):
+    """GLMComBat preserves structure, stays finite, and stays inside its domain."""
+    X, batch = data.draw(glm_data(method=method))
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        out = GLMComBat(batch=batch, method=method).fit_transform(X)
+    _assert_core_invariants(X, out)
+    if method == "seq":
+        assert np.array_equal(out.values, np.rint(out.values))
+        assert (out.values >= 0).all()
+    else:
+        assert ((out.values > 0.0) & (out.values < 1.0)).all()
+
+
+@pytest.mark.parametrize("method", ["seq", "met"])
+@settings(deadline=None, max_examples=10, suppress_health_check=[HealthCheck.too_slow])
+@given(data=st.data())
+def test_property_glm_fit_transform_matches_two_step(method, data):
+    """``fit(X).transform(X)`` equals ``fit_transform(X)`` on a whole cohort."""
+    X, batch = data.draw(glm_data(method=method))
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        combined = GLMComBat(batch=batch, method=method).fit_transform(X)
+        separate = GLMComBat(batch=batch, method=method).fit(X).transform(X)
+    pd.testing.assert_frame_equal(combined, separate)
+
+
+@pytest.mark.parametrize("method", ["seq", "met"])
+@settings(deadline=None, max_examples=10, suppress_health_check=[HealthCheck.too_slow])
+@given(data=st.data())
+def test_property_glm_transform_is_per_observation(method, data):
+    """Every held-out row is corrected independently of the rows beside it."""
+    X, batch = data.draw(glm_data(method=method))
+    held_out = np.concatenate(
+        [np.flatnonzero(np.asarray(batch) == level)[-2:] for level in batch.unique()]
+    )
+    mask = np.zeros(len(X), dtype=bool)
+    mask[held_out] = True
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        model = GLMComBatModel(method=method).fit(X.loc[~mask], batch=batch[~mask])
+        together = model.transform(X.loc[mask], batch=batch[mask])
+        alone = pd.concat(
+            [
+                model.transform(X.loc[mask].iloc[[i]], batch=batch[mask].iloc[[i]])
+                for i in range(int(mask.sum()))
+            ]
+        )
+    pd.testing.assert_frame_equal(together, alone)

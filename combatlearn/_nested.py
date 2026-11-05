@@ -1,21 +1,7 @@
 """Orchestration helpers for NestedComBat (*Horng et al.* 2022).
 
-Nested ComBat harmonizes several batch variables (e.g. site, scanner, protocol)
-by applying single-batch ComBat to each one in sequence, every step delegating
-to a :class:`~combatlearn.core.ComBatModel`. This module holds the pieces that
-surround that sequence and add no new empirical-Bayes math:
-
-* :func:`fit_nested_sequence` - fit one ``ComBatModel`` per batch variable in a
-  given order, chaining the transforms.
-* :func:`anderson_darling_batch_count` - the residual-batch-effect objective the
-  OPNested order search minimizes (Anderson-Darling k-sample feature count).
-* :func:`search_order` - exhaustive order search over all ``k!`` orderings, with
-  a factorial guardrail that falls back to greedy forward selection.
-* :class:`GMMGrouping` - the per-feature Gaussian-mixture grouping fed back into
-  the sequence as an extra batch variable (``+GMM``) or covariate (``-GMM``).
-
-Everything here is learned on the training data and frozen for transform, so the
-resulting estimator stays inductive / cross-validation-safe.
+The sequential single-batch ComBat fits, the Anderson-Darling order-search
+objective, and the GMM grouping; all are learned at fit and frozen for transform.
 """
 
 from __future__ import annotations
@@ -61,12 +47,9 @@ def anderson_darling_batch_count(
 ) -> int:
     """Number of features with a significant residual batch effect.
 
-    For every batch variable and every feature the Anderson-Darling k-sample test
-    (:func:`scipy.stats.anderson_ksamp`) compares the feature distribution across
-    that variable's levels; a feature is counted once per batch variable whose
-    test is significant at ``alpha``. The counts are summed over all batch
-    variables, so a lower value means less residual batch structure. This is the
-    objective minimized by the OPNested order search.
+    Counts (feature, batch variable) pairs whose Anderson-Darling k-sample test
+    (:func:`scipy.stats.anderson_ksamp`) is significant at ``alpha``; degenerate
+    features do not count. This is the objective the OPNested order search minimizes.
 
     Parameters
     ----------
@@ -86,8 +69,7 @@ def anderson_darling_batch_count(
     n_features = col_values.shape[1]
     total = 0
     with warnings.catch_warnings():
-        # anderson_ksamp warns when the p-value is capped to [0.001, 0.25]; that
-        # capping never changes the alpha=0.05 decision, so the warning is considered noise.
+        # Warns only when p is capped to [0.001, 0.25]; harmless at alpha=0.05.
         warnings.simplefilter("ignore")
         for batch in batch_vars.values():
             labels = np.asarray(batch)
@@ -101,8 +83,6 @@ def anderson_darling_batch_count(
                 try:
                     result = anderson_ksamp(samples)
                 except ValueError:
-                    # Degenerate feature (e.g. constant within the pooled sample):
-                    # no detectable batch effect, so it does not count.
                     continue
                 if result.significance_level < alpha:
                     total += 1
@@ -119,11 +99,8 @@ def fit_nested_sequence(
 ) -> tuple[list[ModelStep], pd.DataFrame]:
     """Fit one ``ComBatModel`` per batch variable in ``order``, chaining transforms.
 
-    The covariates ``disc`` / ``cont`` are preserved across every step, so nesting
-    composes with the covariate-aware, CovBat, and GAM engines.
-
-    Returns the list of ``(batch_variable, fitted_model)`` steps and the fully
-    harmonized training data.
+    Covariates are protected at every step. Returns the ``(batch_variable, model)``
+    steps and the fully harmonized training data.
     """
     models: list[ModelStep] = []
     X_current = X
@@ -187,8 +164,7 @@ def _search_greedy(
     make_model: Callable[[str], ComBatModel],
     alpha: float,
 ) -> tuple[list[str], list[ModelStep]]:
-    """Greedy forward selection: at each position pick the step that most reduces
-    the AD feature count, harmonize with it, then continue with the rest."""
+    """Greedy forward selection: repeatedly apply the step that most lowers the AD count."""
     remaining = list(names)
     order: list[str] = []
     models: list[ModelStep] = []
@@ -232,13 +208,9 @@ def search_order(
 ) -> tuple[list[str], list[ModelStep], bool]:
     """Select a harmonization order that minimizes the residual batch effect.
 
-    All ``k!`` orderings are tried exhaustively when ``k <= max_exhaustive_vars``;
-    above the cap the factorial cost is prohibitive, so a warning is issued and
-    the search falls back to greedy forward selection. A large exhaustive search
-    (``k >= 4``) also warns up front with the number of ComBat fits it will run.
-
-    Returns the chosen order, the fitted sequence for that order, and whether the
-    greedy fallback was used.
+    Exhaustive over all ``k!`` orderings when ``k <= max_exhaustive_vars`` (warning
+    from ``k >= 4``), else greedy with a warning. Returns the order, its fitted
+    sequence, and whether the greedy fallback was used.
     """
     k = len(names)
     if k <= max_exhaustive_vars:
@@ -270,16 +242,9 @@ def search_order(
 class GMMGrouping:
     """A per-feature Gaussian-mixture grouping (*Horng et al.* 2022, GMM ComBat).
 
-    A 2-component Gaussian mixture is fit to each feature; features whose split
-    leaves either cluster below ``min_cluster_frac`` of the samples are discarded
-    (an unbalanced split rarely reflects a real latent group), and the balanced
-    feature with the lowest AIC is retained. Its two-component assignment is the
-    latent grouping fed back into NestedComBat as an extra batch variable
-    (``+GMM``) or a protected covariate (``-GMM``).
-
-    The mixture is fit on the training data and stored, so held-out samples are
-    assigned by :meth:`assign` (``predict`` on the same fitted mixture), keeping
-    the grouping leakage-free.
+    A 2-component mixture is fit to each feature; among those whose smaller cluster
+    exceeds ``min_cluster_frac`` of the samples, the lowest-AIC one gives the grouping,
+    used as a batch variable (``+GMM``) or covariate (``-GMM``).
     """
 
     def __init__(self, feature: object, gmm: GaussianMixture) -> None:

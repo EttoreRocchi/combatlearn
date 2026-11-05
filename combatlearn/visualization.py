@@ -207,8 +207,20 @@ def _create_interactive_plot(
         "batch_to_color": batch_to_color,
         "n_components": n_components,
     }
-    _add_plotly_traces(fig, X_orig, **trace_kwargs, col=1, showlegend=False)  # type: ignore[arg-type]
-    _add_plotly_traces(fig, X_trans, **trace_kwargs, col=2, showlegend=show_legend)  # type: ignore[arg-type]
+    _add_plotly_traces(
+        fig,
+        X_orig,
+        **trace_kwargs,  # type: ignore[arg-type]
+        col=1,
+        showlegend=False,
+    )
+    _add_plotly_traces(
+        fig,
+        X_trans,
+        **trace_kwargs,  # type: ignore[arg-type]
+        col=2,
+        showlegend=show_legend,
+    )
 
     if title is None:
         title = f"ComBat correction effect visualized with {method_upper}"
@@ -425,8 +437,8 @@ def plot_feature_diagnostics(
           contributions (each sums to 1 separately).
     mode : {'magnitude', 'distribution'}, default='magnitude'
         - 'magnitude': y-axis shows absolute batch effect magnitude
-        - 'distribution': y-axis shows relative contribution (proportion), includes
-          annotation showing cumulative contribution of top_n features
+        - 'distribution': y-axis shows relative contribution (proportion), and the
+          cumulative contribution of the top_n features is printed
           (e.g., "Top 20 features explain 75% of total batch effect")
     layout : {'grouped', 'diverging'}, default='grouped'
         Only used when ``kind='combined'``.
@@ -435,9 +447,8 @@ def plot_feature_diagnostics(
           x-axis.
         - 'diverging': back-to-back bars with location growing leftward and
           scale growing rightward, sharing the feature axis but with an
-          independent x-axis and grid per side. Keeps the absolute (or
-          relative) values of ``mode`` while giving each component its own
-          scale, so a small component is not visually crushed by a large one.
+          independent x-axis per side, so a small component is not visually
+          crushed by a large one.
     weighted : bool, default=True
         If True, batch effects are weighted by batch sample size.
         Passed to :func:`feature_batch_diagnostics`.
@@ -477,7 +488,6 @@ def plot_feature_diagnostics(
     importance_df = feature_batch_diagnostics(combat, mode=mode, weighted=weighted)
     top_features = importance_df.head(top_n)
 
-    # Reverse so highest values are at the top of the horizontal bar plot
     top_features = top_features.iloc[::-1]
 
     if mode == "magnitude":
@@ -488,8 +498,6 @@ def plot_feature_diagnostics(
         title_str = f"Top {top_n} Features by Batch Effect (Distribution)"
 
     if kind == "combined" and layout == "diverging":
-        # Back-to-back bars: location grows leftward, scale grows rightward,
-        # sharing the feature axis but with an independent x-axis/grid per side.
         fig, (ax_loc, ax_scale) = plt.subplots(
             1, 2, sharey=True, figsize=figsize, gridspec_kw={"wspace": 0}
         )
@@ -512,8 +520,6 @@ def plot_feature_diagnostics(
         for sub_ax in (ax_loc, ax_scale):
             sub_ax.grid(axis="x", linestyle=":", alpha=0.6)
             sub_ax.set_axisbelow(True)
-            # Blank the zero tick: both panels share it at the center line,
-            # so the location and scale labels would otherwise overlap there.
             sub_ax.xaxis.set_major_formatter(
                 FuncFormatter(lambda value, _pos: "" if abs(value) < 1e-9 else f"{value:g}")
             )
@@ -523,7 +529,6 @@ def plot_feature_diagnostics(
         fig, ax = plt.subplots(figsize=figsize)
 
         if kind == "combined":
-            # Grouped horizontal bar plot showing location and scale side-by-side
             y = np.arange(len(top_features))
             height = 0.35
 
@@ -550,7 +555,6 @@ def plot_feature_diagnostics(
             ax.set_yticklabels(top_features.index)
             ax.legend()
         else:
-            # Single horizontal bar plot for location or scale
             color = "steelblue" if kind == "location" else "coral"
             ax.barh(
                 range(len(top_features)),
@@ -577,7 +581,6 @@ def plot_feature_diagnostics(
 
     plt.tight_layout()
 
-    # For distribution mode, print cumulative contribution
     if mode == "distribution":
         if kind == "combined":
             cumulative_pct = top_features["combined"].sum() * 100
@@ -585,7 +588,7 @@ def plot_feature_diagnostics(
         elif kind == "location":
             cumulative_pct = top_features["location"].sum() * 100
             effect_label = "location effect"
-        else:  # scale
+        else:
             cumulative_pct = top_features["scale"].sum() * 100
             effect_label = "scale effect"
 
@@ -658,10 +661,12 @@ def plot_batch_effect_heatmap(
     if n_plots == 1:
         axes = [axes]
 
+    gamma_lim = float(np.abs(gamma_df.to_numpy()).max()) or 1.0
     sns.heatmap(
         gamma_df,
         cmap="RdBu_r",
-        center=0,
+        vmin=-gamma_lim,
+        vmax=gamma_lim,
         ax=axes[0],
         xticklabels=True,
         yticklabels=True,
@@ -676,10 +681,12 @@ def plot_batch_effect_heatmap(
             index=[str(b) for b in batch_levels],
             columns=top_features,
         )
+        delta_lim = float(np.abs(log_delta_df.to_numpy()).max()) or 1.0
         sns.heatmap(
             log_delta_df,
             cmap="RdBu_r",
-            center=0,
+            vmin=-delta_lim,
+            vmax=delta_lim,
             ax=axes[1],
             xticklabels=True,
             yticklabels=True,

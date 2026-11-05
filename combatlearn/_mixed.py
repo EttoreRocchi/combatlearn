@@ -1,23 +1,8 @@
-"""Random-intercept linear mixed model fitting for Longitudinal ComBat.
+"""Random-intercept linear mixed model, fit by REML, for Longitudinal ComBat.
 
-Fits, for every feature (column of ``Y``) simultaneously, the model
-
-    y = X @ beta + Z @ u + eps,    u ~ N(0, tau^2 I),   eps ~ N(0, sigma^2 I)
-
-where ``Z`` is the subject (random-intercept) indicator matrix. Estimation is
-by REML, profiling out ``beta`` and ``sigma^2`` so that only the scalar
-variance ratio ``lambda = tau^2 / sigma^2`` is optimized per feature.
-
-The single random-intercept grouping makes the marginal covariance
-``V = sigma^2 (I + lambda Z Z^T)`` block diagonal (one block per subject), so
-``V^{-1}`` is available in closed form via Sherman-Morrison and every operation
-is O(n) per feature. The variance ratio is found by a vectorized grid search
-over ``lambda`` followed by a parabolic refinement, after which the fixed
-effects, residual variance, and random-intercept BLUPs are computed in a single
-per-feature pass.
-
-This keeps Longitudinal ComBat dependency-free (numpy only); correctness is
-cross-checked against ``statsmodels.MixedLM`` in the test suite.
+Fits ``y = X beta + Z u + eps`` per feature, profiling out ``beta`` and ``sigma^2``
+so only ``lambda = tau^2 / sigma^2`` is searched; the block-diagonal covariance is
+inverted in O(n) via Sherman-Morrison.
 """
 
 from __future__ import annotations
@@ -84,6 +69,8 @@ def fit_random_intercept(
 ) -> tuple[FloatArray, FloatArray, FloatArray, FloatArray]:
     """Fit a random-intercept LME per feature by REML.
 
+    ``lambda`` is found by a log-spaced grid search refined by a parabolic step.
+
     Parameters
     ----------
     X : ndarray of shape (n, p)
@@ -120,7 +107,6 @@ def fit_random_intercept(
     n_features = Y.shape[1]
     ridge = eps * float(np.trace(X.T @ X)) / max(p, 1)
 
-    # Vectorized grid search for the variance ratio (per feature).
     log_grid = np.linspace(-4.0, 4.0, n_grid)
     lam_grid = np.concatenate([[0.0], 10.0**log_grid])
     fvals = np.empty((lam_grid.size, n_features), dtype=np.float64)
@@ -129,7 +115,6 @@ def fit_random_intercept(
     best = np.argmin(fvals, axis=0)
     lam_opt = lam_grid[best].astype(np.float64)
 
-    # Vectorized parabolic refinement (log10 space) for interior positive optima.
     interior = (best >= 2) & (best <= n_grid - 1)
     if np.any(interior):
         bi = best[interior]
@@ -142,7 +127,6 @@ def fit_random_intercept(
         step = log_grid[1] - log_grid[0]
         lam_opt[interior] = 10.0 ** (log_grid[bi - 1] + delta * step)
 
-    # Final per-feature fixed effects, residual variance, and random-intercept BLUPs.
     beta = np.empty((p, n_features), dtype=np.float64)
     sigma2 = np.empty(n_features, dtype=np.float64)
     blup = np.zeros((n_groups, n_features), dtype=np.float64)

@@ -1,3 +1,5 @@
+import warnings
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -6,9 +8,14 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from utils import simulate_longitudinal_data
 
-from combatlearn import ComBat
+from combatlearn import ComBat, LongitudinalComBat
 from combatlearn._mixed import fit_random_intercept
 from combatlearn.core import ComBatModel
+from combatlearn.transductive import TransductiveComBat
+
+pytestmark = pytest.mark.filterwarnings(
+    "ignore:method='longitudinal' on the generic ComBat transformer:DeprecationWarning"
+)
 
 
 def _fit_kwargs():
@@ -175,7 +182,7 @@ def test_random_intercept_recovers_fixed_effects():
 
     np.testing.assert_allclose(beta[:, 0], beta_true, rtol=0, atol=0.25)
     assert 0.5 < sigma2[0] < 2.0
-    assert lam_opt[0] > 0.0  # a real random intercept is detected
+    assert lam_opt[0] > 0.0
 
 
 def test_random_intercept_matches_statsmodels():
@@ -203,6 +210,140 @@ def test_random_intercept_matches_statsmodels():
     np.testing.assert_allclose(beta[:, 0], res.fe_params, rtol=0.02, atol=0.02)
     np.testing.assert_allclose(sigma2[0], res.scale, rtol=0.05)
     np.testing.assert_allclose(tau2, sm_tau2, rtol=0.12, atol=0.05)
+
+
+def _long_kwargs():
+    """``(X, kwargs)`` for the inductive ``LongitudinalComBat``."""
+    X, batch, subject, time = simulate_longitudinal_data()
+    return X, {"batch": batch, "subject_id": subject, "time_covariate": time}
+
+
+def test_longitudinal_combat_is_exported():
+    """LongitudinalComBat is importable from the package root."""
+    import combatlearn
+
+    assert combatlearn.LongitudinalComBat is LongitudinalComBat
+    assert "LongitudinalComBat" in combatlearn.__all__
+
+
+def test_longitudinal_combat_matches_transductive_whole_cohort():
+    """Whole-cohort fit_transform is bit-identical to TransductiveComBat's."""
+    X, kwargs = _long_kwargs()
+    inductive = LongitudinalComBat(**kwargs).fit_transform(X)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        transductive = TransductiveComBat(method="longitudinal", **kwargs).fit_transform(X)
+    np.testing.assert_array_equal(inductive.values, transductive.values)
+
+
+def test_longitudinal_combat_matches_deprecated_combat_path():
+    """Whole-cohort fit_transform is bit-identical to ComBat(method='longitudinal')."""
+    X, kwargs = _long_kwargs()
+    inductive = LongitudinalComBat(**kwargs).fit_transform(X)
+    deprecated = ComBat(method="longitudinal", **kwargs).fit_transform(X)
+    np.testing.assert_array_equal(inductive.values, deprecated.values)
+
+
+def test_longitudinal_combat_blup_reused_for_seen_zero_for_unseen():
+    """Seen subjects reuse their frozen BLUP; unseen ones get exactly zero.
+
+    With ``mean_only=False`` the seen/unseen gap is ``blup * (1 - 1/sqrt(delta_star))``.
+    """
+    X, batch, subject, time = simulate_longitudinal_data()
+    est = LongitudinalComBat(batch=batch, subject_id=subject, time_covariate=time).fit(X)
+    out_seen = est.transform(X)
+
+    est.set_params(subject_id=subject.map("ghost_a_{}".format))
+    out_unseen_a = est.transform(X)
+    est.set_params(subject_id=subject.map("ghost_b_{}".format))
+    out_unseen_b = est.transform(X)
+    np.testing.assert_array_equal(out_unseen_a.values, out_unseen_b.values)
+
+    model = est._model
+    levels = list(model._re_subject_levels)
+    blup_rows = model._re_blup[[levels.index(s) for s in subject]]
+    assert np.abs(blup_rows).max() > 0
+
+    batch_pos = {lvl: i for i, lvl in enumerate(model._batch_levels)}
+    delta_rows = model._delta_star[[batch_pos[b] for b in batch]]
+    expected = blup_rows * (1.0 - 1.0 / np.sqrt(delta_rows))
+    np.testing.assert_allclose(
+        out_seen.values - out_unseen_a.values, expected, rtol=1e-9, atol=1e-9
+    )
+
+
+def test_longitudinal_combat_holdout_subjects_are_transformable():
+    """A held-out visit of a subject seen at fit transforms without refitting."""
+    X, batch, subject, time = simulate_longitudinal_data()
+    train = (time < 2.0).to_numpy()
+    est = LongitudinalComBat(batch=batch, subject_id=subject, time_covariate=time).fit(X[train])
+    out = est.transform(X[~train])
+    assert out.shape == X[~train].shape
+    assert np.isfinite(out.values).all()
+
+
+def test_longitudinal_combat_on_unseen_subject_error_raises():
+    """on_unseen_subject='error' raises and names the unseen subjects."""
+    X, batch, subject, time = simulate_longitudinal_data()
+    est = LongitudinalComBat(
+        batch=batch, subject_id=subject, time_covariate=time, on_unseen_subject="error"
+    ).fit(X)
+    est.set_params(subject_id=subject.map("ghost_{}".format))
+    with pytest.raises(ValueError, match=r"were not seen at fit"):
+        est.transform(X)
+
+
+def test_longitudinal_combat_on_unseen_subject_error_passes_when_all_seen():
+    """on_unseen_subject='error' is a no-op when the precondition holds."""
+    X, kwargs = _long_kwargs()
+    est = LongitudinalComBat(on_unseen_subject="error", **kwargs).fit(X)
+    population = LongitudinalComBat(**kwargs).fit(X)
+    np.testing.assert_array_equal(est.transform(X).values, population.transform(X).values)
+
+
+def test_longitudinal_combat_invalid_on_unseen_subject_raises():
+    """An unrecognized policy is rejected at fit."""
+    X, kwargs = _long_kwargs()
+    with pytest.raises(ValueError, match="on_unseen_subject="):
+        LongitudinalComBat(on_unseen_subject="ignore", **kwargs).fit(X)
+
+
+def test_longitudinal_combat_requires_subject_id():
+    """subject_id=None is rejected with a message pointing at Fortin."""
+    X, batch, _subject, time = simulate_longitudinal_data()
+    with pytest.raises(ValueError, match=r"requires `subject_id`"):
+        LongitudinalComBat(batch=batch, subject_id=None, time_covariate=time).fit(X)
+
+
+def test_longitudinal_combat_emits_no_deprecation_warning():
+    """LongitudinalComBat emits no DeprecationWarning."""
+    X, kwargs = _long_kwargs()
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", DeprecationWarning)
+        LongitudinalComBat(**kwargs).fit_transform(X)
+
+
+def test_longitudinal_combat_clone_and_pipeline():
+    """The estimator clones and runs inside a Pipeline reproducibly."""
+    X, kwargs = _long_kwargs()
+    pipe = Pipeline([("combat", LongitudinalComBat(**kwargs)), ("scaler", StandardScaler())])
+    out = pipe.fit_transform(X)
+    np.testing.assert_allclose(out, clone(pipe).fit_transform(X), rtol=1e-10, atol=1e-10)
+
+
+def test_combat_longitudinal_deprecation_points_to_longitudinal_combat():
+    """ComBat(method='longitudinal') warns toward LongitudinalComBat, not TransductiveComBat."""
+    X, kwargs = _long_kwargs()
+    with pytest.warns(DeprecationWarning, match="LongitudinalComBat") as record:
+        ComBat(method="longitudinal", **kwargs).fit(X)
+    assert not any("TransductiveComBat" in str(w.message) for w in record)
+
+
+def test_transductive_longitudinal_deprecation_points_to_longitudinal_combat():
+    """TransductiveComBat(method='longitudinal') deprecation names LongitudinalComBat."""
+    X, kwargs = _long_kwargs()
+    with pytest.warns(DeprecationWarning, match="LongitudinalComBat"):
+        TransductiveComBat(method="longitudinal", **kwargs).fit(X)
 
 
 def test_longcombat_alias_matches_longitudinal():

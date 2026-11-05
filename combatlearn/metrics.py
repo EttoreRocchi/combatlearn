@@ -25,29 +25,7 @@ def _compute_pca_embedding(
     X_after: npt.NDArray[Any],
     n_components: int,
 ) -> tuple[npt.NDArray[Any], npt.NDArray[Any], PCA]:
-    """
-    Compute PCA embeddings for both datasets.
-
-    Fits PCA on X_before and applies to both datasets.
-
-    Parameters
-    ----------
-    X_before : npt.NDArray[Any]
-        Original data before correction.
-    X_after : npt.NDArray[Any]
-        Corrected data.
-    n_components : int
-        Number of PCA components.
-
-    Returns
-    -------
-    X_before_pca : npt.NDArray[Any]
-        PCA-transformed original data.
-    X_after_pca : npt.NDArray[Any]
-        PCA-transformed corrected data.
-    pca : PCA
-        Fitted PCA model.
-    """
+    """Fit PCA on ``X_before`` and project both datasets with it."""
     n_components = min(n_components, X_before.shape[1], X_before.shape[0] - 1)
     pca = PCA(n_components=n_components, random_state=42)
     X_before_pca = pca.fit_transform(X_before)
@@ -56,23 +34,9 @@ def _compute_pca_embedding(
 
 
 def _silhouette_batch(X: npt.NDArray[Any], batch_labels: npt.NDArray[Any]) -> float:
-    """
-    Compute silhouette coefficient using batch as cluster labels.
+    """Silhouette coefficient using batch labels as clusters.
 
-    Lower values after correction indicate better batch mixing.
-    Range: [-1, 1], where -1 = batch mixing, 1 = batch separation.
-
-    Parameters
-    ----------
-    X : npt.NDArray[Any]
-        Data matrix.
-    batch_labels : npt.NDArray[Any]
-        Batch labels for each sample.
-
-    Returns
-    -------
-    float
-        Silhouette coefficient.
+    In ``[-1, 1]``; lower after correction means better batch mixing.
     """
     unique_batches = np.unique(batch_labels)
     if len(unique_batches) < 2:
@@ -84,24 +48,7 @@ def _silhouette_batch(X: npt.NDArray[Any], batch_labels: npt.NDArray[Any]) -> fl
 
 
 def _davies_bouldin_batch(X: npt.NDArray[Any], batch_labels: npt.NDArray[Any]) -> float:
-    """
-    Compute Davies-Bouldin index using batch labels.
-
-    Lower values indicate better batch mixing.
-    Range: [0, inf), 0 = perfect batch overlap.
-
-    Parameters
-    ----------
-    X : npt.NDArray[Any]
-        Data matrix.
-    batch_labels : npt.NDArray[Any]
-        Batch labels for each sample.
-
-    Returns
-    -------
-    float
-        Davies-Bouldin index.
-    """
+    """Davies-Bouldin index using batch labels as clusters; higher means better batch mixing."""
     unique_batches = np.unique(batch_labels)
     if len(unique_batches) < 2:
         return 0.0
@@ -118,34 +65,10 @@ def _kbet_score(
     alpha: float = 0.05,
     nn_algorithm: str = "auto",
 ) -> tuple[float, float]:
-    """
-    Compute kBET (k-nearest neighbor Batch Effect Test) acceptance rate.
+    """kBET acceptance rate and mean chi-squared statistic (Buttner et al. 2019).
 
-    Tests if local batch proportions match global batch proportions.
-    Higher acceptance rate = better batch mixing.
-
-    Reference: Buttner et al. (2019) Nature Methods
-
-    Parameters
-    ----------
-    X : npt.NDArray[Any]
-        Data matrix.
-    batch_labels : npt.NDArray[Any]
-        Batch labels for each sample.
-    k0 : int
-        Neighborhood size.
-    alpha : float
-        Significance level for chi-squared test.
-    nn_algorithm : {'auto', 'ball_tree', 'kd_tree', 'brute'}, default='auto'
-        Algorithm used for nearest neighbor computation. Passed to
-        ``sklearn.neighbors.NearestNeighbors``.
-
-    Returns
-    -------
-    acceptance_rate : float
-        Fraction of samples where H0 (uniform mixing) is accepted.
-    mean_stat : float
-        Mean chi-squared statistic across samples.
+    Tests whether each sample's ``k0``-neighborhood matches the global batch
+    proportions; a higher acceptance rate means better batch mixing.
     """
     n_samples = X.shape[0]
     unique_batches, batch_counts = np.unique(batch_labels, return_counts=True)
@@ -196,25 +119,7 @@ def _kbet_score(
 
 
 def _find_sigma(distances: npt.NDArray[Any], target_perplexity: float, tol: float = 1e-5) -> float:
-    """
-    Binary search for sigma to achieve target perplexity.
-
-    Used in LISI computation.
-
-    Parameters
-    ----------
-    distances : npt.NDArray[Any]
-        Distances to neighbors.
-    target_perplexity : float
-        Target perplexity value.
-    tol : float
-        Tolerance for convergence.
-
-    Returns
-    -------
-    float
-        Sigma value.
-    """
+    """Binary-search the Gaussian kernel width that reaches ``target_perplexity`` (LISI)."""
     target_H = np.log2(target_perplexity + 1e-10)
 
     sigma_min, sigma_max = 1e-10, 1e10
@@ -248,30 +153,9 @@ def _lisi_score(
     perplexity: int = 30,
     nn_algorithm: str = "auto",
 ) -> float:
-    """
-    Compute mean Local Inverse Simpson's Index (LISI).
+    """Mean Local Inverse Simpson's Index (Korsunsky et al. 2019, Harmony).
 
-    Range: [1, n_batches], where n_batches = perfect mixing.
-    Higher = better batch mixing.
-
-    Reference: Korsunsky et al. (2019) Nature Methods (Harmony paper)
-
-    Parameters
-    ----------
-    X : npt.NDArray[Any]
-        Data matrix.
-    batch_labels : npt.NDArray[Any]
-        Batch labels for each sample.
-    perplexity : int
-        Perplexity for Gaussian kernel.
-    nn_algorithm : {'auto', 'ball_tree', 'kd_tree', 'brute'}, default='auto'
-        Algorithm used for nearest neighbor computation. Passed to
-        ``sklearn.neighbors.NearestNeighbors``.
-
-    Returns
-    -------
-    float
-        Mean LISI score.
+    In ``[1, n_batches]``; higher means better batch mixing.
     """
     n_samples = X.shape[0]
     unique_batches = np.unique(batch_labels)
@@ -315,24 +199,7 @@ def _lisi_score(
 
 
 def _variance_ratio(X: npt.NDArray[Any], batch_labels: npt.NDArray[Any]) -> float:
-    """
-    Compute between-batch to within-batch variance ratio.
-
-    Similar to F-statistic in one-way ANOVA.
-    Lower ratio after correction = better batch effect removal.
-
-    Parameters
-    ----------
-    X : npt.NDArray[Any]
-        Data matrix.
-    batch_labels : npt.NDArray[Any]
-        Batch labels for each sample.
-
-    Returns
-    -------
-    float
-        Variance ratio (between/within).
-    """
+    """Between- to within-batch variance ratio (ANOVA F-like); lower is better."""
     unique_batches = np.unique(batch_labels)
     n_batches = len(unique_batches)
     n_samples = X.shape[0]
@@ -370,31 +237,7 @@ def _knn_preservation(
     n_jobs: int = 1,
     nn_algorithm: str = "auto",
 ) -> dict[int, float]:
-    """
-    Compute fraction of k-nearest neighbors preserved after correction.
-
-    Range: [0, 1], where 1 = perfect preservation.
-    Higher = better biological structure preservation.
-
-    Parameters
-    ----------
-    X_before : npt.NDArray[Any]
-        Original data.
-    X_after : npt.NDArray[Any]
-        Corrected data.
-    k_values : list of int
-        Values of k for k-NN.
-    n_jobs : int
-        Number of parallel jobs.
-    nn_algorithm : {'auto', 'ball_tree', 'kd_tree', 'brute'}, default='auto'
-        Algorithm used for nearest neighbor computation. Passed to
-        ``sklearn.neighbors.NearestNeighbors``.
-
-    Returns
-    -------
-    dict
-        Mapping from k to preservation fraction.
-    """
+    """Map each k to the mean fraction of k-nearest neighbors kept after correction."""
     results = {}
     max_k = max(k_values)
     max_k = min(max_k, X_before.shape[0] - 1)
@@ -430,27 +273,9 @@ def _pairwise_distance_correlation(
     subsample: int = 1000,
     random_state: int = 42,
 ) -> float:
-    """
-    Compute Spearman correlation of pairwise distances.
+    """Spearman correlation of pairwise distances before vs after correction.
 
-    Range: [-1, 1], where 1 = perfect rank preservation.
-    Higher = better relative relationship preservation.
-
-    Parameters
-    ----------
-    X_before : npt.NDArray[Any]
-        Original data.
-    X_after : npt.NDArray[Any]
-        Corrected data.
-    subsample : int
-        Maximum samples to use (for efficiency).
-    random_state : int
-        Random seed for subsampling.
-
-    Returns
-    -------
-    float
-        Spearman correlation coefficient.
+    Uses at most ``subsample`` randomly drawn rows to bound the O(n^2) cost.
     """
     n_samples = X_before.shape[0]
 
@@ -475,23 +300,7 @@ def _pairwise_distance_correlation(
 
 
 def _mean_centroid_distance(X: npt.NDArray[Any], batch_labels: npt.NDArray[Any]) -> float:
-    """
-    Compute mean pairwise Euclidean distance between batch centroids.
-
-    Lower after correction = better batch alignment.
-
-    Parameters
-    ----------
-    X : npt.NDArray[Any]
-        Data matrix.
-    batch_labels : npt.NDArray[Any]
-        Batch labels for each sample.
-
-    Returns
-    -------
-    float
-        Mean pairwise distance between centroids.
-    """
+    """Mean pairwise Euclidean distance between batch centroids; lower is better."""
     unique_batches = np.unique(batch_labels)
     n_batches = len(unique_batches)
 
@@ -511,23 +320,7 @@ def _mean_centroid_distance(X: npt.NDArray[Any], batch_labels: npt.NDArray[Any])
 
 
 def _levene_median_statistic(X: npt.NDArray[Any], batch_labels: npt.NDArray[Any]) -> float:
-    """
-    Compute median Levene test statistic across features.
-
-    Lower statistic = more homogeneous variances across batches.
-
-    Parameters
-    ----------
-    X : npt.NDArray[Any]
-        Data matrix.
-    batch_labels : npt.NDArray[Any]
-        Batch labels for each sample.
-
-    Returns
-    -------
-    float
-        Median Levene test statistic.
-    """
+    """Median Levene statistic across features; lower means more homogeneous variances."""
     unique_batches = np.unique(batch_labels)
     if len(unique_batches) < 2:
         return 0.0
@@ -613,11 +406,10 @@ def _compute_alignment_metrics(
     X_after_pca: npt.NDArray[Any],
     batch_labels: npt.NDArray[Any],
 ) -> dict[str, Any]:
-    """Compute batch alignment metrics (centroid distance, Levene statistic)."""
+    """Centroid distance in the (optional) PCA space, Levene in the original space."""
     centroid_before = _mean_centroid_distance(X_before_pca, batch_labels)
     centroid_after = _mean_centroid_distance(X_after_pca, batch_labels)
 
-    # Levene test operates on the original feature space, not PCA-reduced
     levene_before = _levene_median_statistic(X_before_orig, batch_labels)
     levene_after = _levene_median_statistic(X_after_orig, batch_labels)
 
@@ -654,10 +446,11 @@ def compute_batch_metrics(
         Number of PCA components for dimensionality reduction before
         computing metrics. If None (default), metrics are computed in
         the original feature space. Must be less than min(n_samples, n_features).
+        The Levene statistic always uses the original feature space.
     k_neighbors : list of int, default=[5, 10, 50]
         Values of k for k-NN preservation metric.
     kbet_k0 : int, optional
-        Neighborhood size for kBET. Default is 10% of samples.
+        Neighborhood size for kBET. Default is ``max(10, 10% of samples)``.
     lisi_perplexity : int, default=30
         Perplexity for LISI computation.
     n_jobs : int, default=1
@@ -672,7 +465,8 @@ def compute_batch_metrics(
         Dictionary with three main keys:
 
         - ``batch_effect``: Silhouette, Davies-Bouldin, kBET, LISI, variance ratio
-          (each with 'before' and 'after' values)
+          (each with 'before' and 'after' values). Better batch mixing means lower
+          silhouette and variance ratio, and higher Davies-Bouldin, kBET and LISI.
         - ``preservation``: k-NN preservation fractions, distance correlation
         - ``alignment``: Centroid distance, Levene statistic (each with
           'before' and 'after' values)
@@ -717,7 +511,6 @@ def compute_batch_metrics(
     if k_neighbors is None:
         k_neighbors = [5, 10, 50]
 
-    # Validate and apply PCA if requested
     if pca_components is not None:
         max_components = min(n_samples, n_features)
         if pca_components >= max_components:

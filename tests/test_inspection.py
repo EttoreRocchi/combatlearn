@@ -133,7 +133,6 @@ def test_feature_diagnostics_mode_magnitude():
 
     importance = feature_batch_diagnostics(combat, mode="magnitude")
 
-    # Values should not sum to 1
     assert importance["combined"].sum() != pytest.approx(1.0, rel=0.01)
 
 

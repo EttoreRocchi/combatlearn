@@ -11,15 +11,11 @@ def simulate_gam_data(
     nonlinear=True,
     random_state=0,
 ):
-    """Data with an additive batch shift over a (non)linear continuous-covariate effect.
+    """Data with an additive batch shift over a (non)linear age effect.
 
-    Returns ``(X, batch, cont, oracle)`` where ``oracle`` is the batch-free signal
-    (true covariate effect + noise) that a perfect harmonizer should recover.
-
-    When ``confound=True`` the batch label is assigned from age tertiles, so the
-    age-driven signal is collinear with batch. With ``nonlinear=True`` (a full-period
-    sinusoid) a linear covariate model (``fortin``) cannot separate the nonlinear age
-    effect from the batch effect, while a spline model (``gam``) can.
+    Returns ``(X, batch, cont, oracle)``; ``oracle`` is the batch-free signal (effect + noise).
+    ``confound=True`` assigns batches by age tertiles; ``nonlinear=True`` makes the age
+    effect a full-period sinusoid, which ``fortin`` cannot separate from batch.
     """
     rng = np.random.default_rng(random_state)
     age = rng.uniform(20, 80, n_samples)
@@ -52,25 +48,19 @@ def simulate_covbat_data(
     cov_strength=2.0,
     random_state=0,
 ):
-    """GAM-style data whose *covariance* carries a genuine batch effect, for CovBat.
+    """GAM-style data with a batch effect in the covariance, for CovBat.
 
-    Returns ``(X, batch, cont)``. Unlike :func:`simulate_gam_data` (a single rank-1
-    age effect, which Fortin regresses out and CovBat then collapses to one principal
-    component), this adds a low-rank correlated block that is independent of ``age``
-    (so it survives the Fortin mean/variance step) and is rescaled per batch (so the
-    batches genuinely differ in covariance). CovBat therefore retains several principal
-    components and its covariance-harmonization step does real work.
+    Returns ``(X, batch, cont)``. On top of a nonlinear age effect, a rank-``n_components``
+    block scaled by ``cov_strength``, independent of age and rescaled per batch, gives the
+    batches different covariances, so CovBat retains several PCs.
     """
     rng = np.random.default_rng(random_state)
     age = rng.uniform(20, 80, n_samples)
     batch_arr = rng.choice(["A", "B", "C"], n_samples)
 
-    # Nonlinear age-driven mean signal (the spline mean model removes this).
     curve = np.sin((age - 20) / 60 * 2 * np.pi)
     mean_signal = signal * np.outer(curve, rng.uniform(0.5, 1.5, n_features))
 
-    # Low-rank correlated block, independent of age but rescaled per batch: this is
-    # the batch-covariance effect CovBat is meant to remove and Fortin cannot.
     loadings = rng.standard_normal((n_components, n_features))
     scores = rng.standard_normal((n_samples, n_components))
     batch_scale = {
@@ -92,6 +82,82 @@ def simulate_covbat_data(
     return X, batch, cont
 
 
+def simulate_species_covbat_data(
+    n_per_batch=80,
+    n_features=40,
+    n_species_features=10,
+    species_effect=2.0,
+    n_components=4,
+    random_state=0,
+):
+    """CovBat data with a discrete covariate that is unbalanced across batches.
+
+    Returns ``(X, batch, disc)``: three batches of ``n_per_batch`` samples, each with its
+    own location shift and covariance. ``disc["species"]`` is 80%, 50% and 20% ``"S1"`` in
+    batches A, B and C; ``"S2"`` adds ``species_effect`` to the first ``n_species_features``.
+    """
+    rng = np.random.default_rng(random_state)
+    s1_share = {"A": 0.8, "B": 0.5, "C": 0.2}
+    batch_arr = []
+    species_arr = []
+    for lvl, share in s1_share.items():
+        n_s1 = round(share * n_per_batch)
+        batch_arr += [lvl] * n_per_batch
+        species_arr += ["S1"] * n_s1 + ["S2"] * (n_per_batch - n_s1)
+    batch_np = np.asarray(batch_arr)
+    species_np = np.asarray(species_arr)
+    n_samples = len(batch_np)
+
+    centers = {"A": 2.0, "B": -2.0, "C": 0.6}
+    shifts = {lvl: rng.normal(centers[lvl], 0.5, n_features) for lvl in s1_share}
+    location = np.array([shifts[b] for b in batch_np])
+
+    loadings = rng.standard_normal((n_components, n_features))
+    batch_scale = {
+        "A": np.linspace(2.0, 0.5, n_components),
+        "B": np.linspace(0.5, 2.0, n_components),
+        "C": np.ones(n_components),
+    }
+    scores = rng.standard_normal((n_samples, n_components))
+    correlated = (scores * np.array([batch_scale[b] for b in batch_np])) @ loadings
+
+    noise = rng.standard_normal((n_samples, n_features))
+    species = np.zeros((n_samples, n_features))
+    species[species_np == "S2", :n_species_features] = species_effect
+
+    X = pd.DataFrame(
+        species + location + correlated + noise,
+        columns=[f"feat_{i}" for i in range(n_features)],
+    )
+    idx = X.index
+    batch = pd.Series(batch_np, index=idx, name="batch")
+    disc = pd.DataFrame({"species": species_np}, index=idx)
+    return X, batch, disc
+
+
+def within_batch_species_gap(X, batch, disc, n_species_features=10):
+    """Mean within-batch S2 - S1 gap on the species features (true value: ``species_effect``)."""
+    values = np.asarray(X)[:, :n_species_features]
+    b = np.asarray(batch)
+    s = np.asarray(disc["species"])
+    gaps = [
+        (values[(b == lvl) & (s == "S2")].mean(0) - values[(b == lvl) & (s == "S1")].mean(0)).mean()
+        for lvl in np.unique(b)
+    ]
+    return float(np.mean(gaps))
+
+
+def residual_batch_gap(X, batch, disc):
+    """Mean |batch mean| after centering each species on its pooled mean (~0 when harmonized)."""
+    values = np.array(X, dtype=float)
+    b = np.asarray(batch)
+    s = np.asarray(disc["species"])
+    for sp in np.unique(s):
+        values[s == sp] -= values[s == sp].mean(0)
+    batch_means = np.vstack([values[b == lvl].mean(0) for lvl in np.unique(b)])
+    return float(np.abs(batch_means).mean())
+
+
 def simulate_data(n_samples=150, n_features=25, shift=3.0, random_state=0):
     rng = np.random.default_rng(random_state)
     X = rng.standard_normal((n_samples, n_features))
@@ -99,7 +165,7 @@ def simulate_data(n_samples=150, n_features=25, shift=3.0, random_state=0):
         ["A", "B", "C"],
         [n_samples // 3, n_samples // 3, n_samples - 2 * (n_samples // 3)],
     )
-    shifts = {"A": shift, "B": -shift, "C": 0.3 * shift}  # to shift the means
+    shifts = {"A": shift, "B": -shift, "C": 0.3 * shift}
     for i, b in enumerate(batches):
         X[i] += shifts[b]
     X = pd.DataFrame(X)
@@ -113,8 +179,8 @@ def simulate_covariate_data(random_state=0):
     disc = pd.DataFrame({"diag": rng.choice(["diag_1", "diag_2"], size=len(X))}, index=X.index)
     age = rng.normal(50, 12, size=len(X))
     cont = pd.DataFrame({"age": age}, index=X.index)
-    X.loc[disc["diag"] == "diag_1"] += 1.5  # to add effect in diag
-    X += (age[:, None] - age.mean()) * 0.04  # to add effect in age
+    X.loc[disc["diag"] == "diag_1"] += 1.5
+    X += (age[:, None] - age.mean()) * 0.04
     return X, batch, disc, cont
 
 
@@ -129,12 +195,9 @@ def simulate_nested_data(
 ):
     """Multi-batch data with an additive shift per batch variable, for NestedComBat.
 
-    Returns ``(X, batch, disc, cont)`` where ``batch`` is a DataFrame with one column
-    per batch variable (site, scanner, protocol), each contributing its own additive
-    batch effect (with a distinct per-feature loading), over a shared continuous
-    covariate (age) signal to preserve. With ``latent_split=True`` a hidden bimodal
-    grouping is injected into every feature, so a per-feature Gaussian mixture (GMM
-    ComBat) has a real grouping to recover.
+    Returns ``(X, batch, disc, cont)``; ``batch`` has one column per batch variable (the
+    first ``n_vars`` of site, scanner, protocol) over a linear age effect.
+    ``latent_split=True`` adds a hidden bimodal grouping to every feature, for GMM ComBat.
     """
     rng = np.random.default_rng(random_state)
     names = ["site", "scanner", "protocol"][:n_vars]

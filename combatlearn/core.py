@@ -22,6 +22,7 @@ from scipy.interpolate import BSpline
 from sklearn.decomposition import PCA
 
 from ._mixed import fit_random_intercept
+from ._utils import _code_levels, _fit_levels
 
 ArrayLike: TypeAlias = pd.DataFrame | pd.Series | npt.NDArray[Any]
 FloatArray: TypeAlias = npt.NDArray[np.float64]
@@ -33,20 +34,21 @@ _METHOD_ALIASES: dict[str, str] = {
     "longcombat": "longitudinal",
     "combatgam": "gam",
     "covbatgam": "covbat_gam",
+    "combatseq": "seq",
+    "combatmet": "met",
 }
 
 _GAM_METHODS: frozenset[str] = frozenset({"gam", "covbat_gam"})
+_EPRIOR_BLOCK_ELEMENTS = 1 << 22
+_PC_RELATIVE_VARIANCE_FLOOR = 1e-10
 
 
 def _resolve_method(method: str) -> str:
     """Resolve a method name or literature alias to its canonical (author) name.
 
-    Author keys pass through unchanged; method-name aliases map to them, e.g.
-    ``"classic_combat"`` -> ``"johnson"``, ``"neurocombat"`` -> ``"fortin"``,
-    ``"covbat"`` -> ``"chen"``, ``"combat_gam"`` -> ``"gam"``. Case- and
-    separator-insensitive (hyphens, underscores, and spaces are ignored for
-    alias matching), so ``"covbat_gam"``, ``"covbat-gam"`` and ``"CovBatGAM"``
-    all resolve to the canonical ``"covbat_gam"``.
+    Case- and separator-insensitive, e.g. ``"CovBat-GAM"`` -> ``"covbat_gam"``. The
+    GLM aliases (``"combat_seq"`` -> ``"seq"``, ``"combat_met"`` -> ``"met"``) resolve
+    here too; each estimator validates the result against the methods it supports.
     """
     raw = method.lower()
     stripped = raw.replace("-", "").replace("_", "").replace(" ", "")
@@ -78,7 +80,8 @@ class ComBatModel:
         Use the parametric empirical Bayes variant.
     mean_only : bool, default=False
         If True, only the mean is adjusted (`gamma_star`),
-        ignoring the variance (`delta_star`).
+        ignoring the variance (`delta_star`). For 'chen'/'covbat_gam' this applies to
+        the ComBat step only; PC-score variances are still harmonized.
     reference_batch : str, optional
         If specified, the batch level to use as reference.
     covbat_cov_thresh : float or int, default=0.9
@@ -146,9 +149,10 @@ class ComBatModel:
         self._p_design: int
         self._covbat_pca: PCA
         self._covbat_n_pc: int
-        self._batch_levels_pc: pd.Index
-        self._pc_gamma_star: FloatArray
-        self._pc_delta_star: FloatArray
+        self._pc_gamma: FloatArray
+        self._pc_delta: FloatArray
+        self._pc_score_mean: FloatArray
+        self._pc_score_var: FloatArray
         self._re_subject_levels: pd.Index
         self._re_blup: FloatArray
         self._smooth_cols: list[Any]
@@ -157,8 +161,8 @@ class ComBatModel:
         self._design_cond: float | None
         self._design_rank: int | None
         self._design_ncols: int | None
+        self._discrete_levels: dict[Any, pd.Index] = {}
 
-        # Validate spline parameters (used by the gam / covbat_gam methods)
         if self.spline_degree < 1:
             raise ValueError(
                 f"spline_degree={self.spline_degree!r} is invalid. Expected an int >= 1 "
@@ -171,7 +175,6 @@ class ComBatModel:
                 f"(>= {self.spline_degree + 1}); the default is 10."
             )
 
-        # Validate covbat_cov_thresh
         if isinstance(self.covbat_cov_thresh, float):
             if not (0.0 < self.covbat_cov_thresh <= 1.0):
                 raise ValueError(
@@ -261,6 +264,13 @@ class ComBatModel:
             Fitted model.
         """
         method = _resolve_method(self.method)
+        if method in {"seq", "met"}:
+            raise ValueError(
+                f"method={self.method!r} is a non-Gaussian GLM engine and lives on a "
+                f"separate estimator, because the admissible domain of X differs "
+                f"(counts for 'seq', proportions for 'met'). Use "
+                f"combatlearn.GLMComBat(batch=..., method={method!r}) instead."
+            )
         if method not in {"johnson", "fortin", "chen", "longitudinal", "gam", "covbat_gam"}:
             raise ValueError(
                 f"method={self.method!r} is not recognized. Expected an author name "
@@ -313,7 +323,6 @@ class ComBatModel:
         self._batch_levels = batch.cat.categories
         grand_mean = X.mean(axis=0)
 
-        # Within-batch residual variance
         n_samples = len(X)
         resid = X.copy()
         for lvl in self._batch_levels:
@@ -346,7 +355,11 @@ class ComBatModel:
         b_names = [str(lvl) for lvl in self._batch_levels]
         gamma_star, delta_star = self._shrink_eb(gamma_hat_arr, delta_hat_arr, n_per_batch, b_names)
         gamma_star, delta_star, self._reference_batch_idx = self._apply_reference_shift(
-            gamma_star, delta_star, self._batch_levels
+            gamma_star,
+            delta_star,
+            self._batch_levels,
+            gamma_hat=gamma_hat_arr,
+            delta_hat=delta_hat_arr,
         )
 
         self._grand_mean = grand_mean
@@ -355,7 +368,6 @@ class ComBatModel:
         self._delta_star = delta_star
         self._n_per_batch = n_per_batch
         self._design_cond = None
-        # Johnson uses no covariate design, so there is no rank-deficiency check.
         self._design_rank = None
         self._design_ncols = None
 
@@ -439,9 +451,7 @@ class ComBatModel:
     def _apply_smooth_terms(self, cont: pd.DataFrame | None, *, fit: bool) -> pd.DataFrame:
         """Replace each smooth continuous column with its B-spline basis columns.
 
-        Non-smooth continuous columns are kept (linear). On ``fit`` the knots are
-        computed from the training data and stored; on transform the stored knots
-        are reused so the basis is reproducible and leakage-free.
+        Non-smooth columns stay linear. Knots are learned on ``fit`` and reused after.
         """
         if cont is None or cont.shape[1] == 0:
             raise ValueError(
@@ -502,9 +512,7 @@ class ComBatModel:
     ) -> None:
         """Fortin et al. (2018) neuroComBat (and Pomponio et al. 2020 ComBat-GAM).
 
-        For the ``gam``/``covbat_gam`` methods the smooth continuous covariates are
-        replaced by B-spline bases before the (otherwise identical) least-squares ->
-        standardize -> empirical-Bayes pipeline.
+        For the GAM methods the smooth covariates are first replaced by B-spline bases.
         """
         if self._is_gam():
             cont = self._apply_smooth_terms(cont, fit=True)
@@ -524,7 +532,7 @@ class ComBatModel:
 
         parts: list[pd.DataFrame] = [batch_dummies]
         if disc is not None:
-            parts.append(pd.get_dummies(disc.astype("category"), drop_first=True).astype(float))
+            parts.append(self._discrete_dummies(disc, fit=True))
 
         if cont is not None:
             parts.append(cont.astype(float))
@@ -534,8 +542,6 @@ class ComBatModel:
         design = design_df.values
         self._design_cond = float(la.cond(design))
         p_design = design.shape[1]
-        # Rank of the actual least-squares design (spline columns included for the
-        # GAM engines), so the rank-deficiency check reflects the design truly used.
         self._design_rank = int(la.matrix_rank(design))
         self._design_ncols = p_design
 
@@ -580,7 +586,6 @@ class ComBatModel:
         b_names = [str(lvl) for lvl in self._batch_levels]
         gamma_star, delta_star = self._shrink_eb(gamma_hat, delta_hat, n_per_batch, b_names)
 
-        # The reference batch is left unchanged: its parameters are pinned to (0, 1).
         if ref_idx is not None:
             gamma_star[ref_idx] = 0.0
             if not self.mean_only:
@@ -599,54 +604,76 @@ class ComBatModel:
         disc: pd.DataFrame | None,
         cont: pd.DataFrame | None,
     ) -> None:
-        """Chen et al. (2022) CovBat."""
-        self._fit_fortin(X, batch, disc, cont)
-        X_meanvar_adj = self._transform_fortin(X, batch, disc, cont)
-        pca = PCA(svd_solver="full", whiten=False).fit(X_meanvar_adj)
+        """Chen et al. (2022) CovBat, Steps 1-3 (also serves the covbat_gam method).
 
-        # Determine number of components based on threshold type
+        The PCA runs on the Fortin residuals with the covariate effects removed, so the
+        score correction cannot absorb an unbalanced covariate. Scores are moment-matched
+        in mean and variance without EB (``score.eb = FALSE``), whatever ``mean_only``.
+        """
+        self._fit_fortin(X, batch, disc, cont)
+        resid, _ = self._fortin_residuals(X, batch, disc, cont)
+        pca = PCA(svd_solver="full", whiten=False).fit(resid)
+
+        # PCs with ~0 training variance are dropped: standardizing them divides by ~0.
+        ev = pca.explained_variance_
+        n_with_variance = int(np.sum(ev > _PC_RELATIVE_VARIANCE_FLOOR * ev[0])) if ev[0] > 0 else 0
+
         if isinstance(self.covbat_cov_thresh, int):
-            n_pc = min(self.covbat_cov_thresh, len(pca.explained_variance_ratio_))
+            n_pc = min(self.covbat_cov_thresh, n_with_variance)
         else:
             cumulative = np.cumsum(pca.explained_variance_ratio_)
-            n_pc = int(np.searchsorted(cumulative, self.covbat_cov_thresh) + 1)
+            # The cumulative ratio may end below 1.0 in floating point; cap it.
+            n_pc = min(
+                int(np.searchsorted(cumulative, self.covbat_cov_thresh) + 1), n_with_variance
+            )
 
         self._covbat_pca = pca
         self._covbat_n_pc = n_pc
 
         if n_pc < 2:
             warnings.warn(
-                f"CovBat retained a single principal component (n_pc={n_pc}); covariance "
-                f"harmonization is not meaningful with one component, and the correction "
+                f"CovBat retained fewer than two principal components (n_pc={n_pc}); covariance "
+                f"harmonization is not meaningful with fewer than two, and the correction "
                 f"reduces to the mean/variance adjustment already done by Fortin. Consider "
                 f"method='fortin', or raise covbat_cov_thresh to retain more components.",
                 stacklevel=2,
             )
 
-        scores = pca.transform(X_meanvar_adj)[:, :n_pc]
-        scores_df = pd.DataFrame(scores, index=X.index, columns=[f"PC{i + 1}" for i in range(n_pc)])
-        self._batch_levels_pc = self._batch_levels
-        n_per_batch = self._n_per_batch
+        scores = pca.transform(resid)[:, :n_pc]
+        masks = [np.asarray(batch == lvl) for lvl in self._batch_levels]
+        within = scores.copy()
+        for mask in masks:
+            within[mask] -= scores[mask].mean(axis=0)
+        self._pc_score_mean = scores.mean(axis=0)
+        self._pc_score_var = (within**2).sum(axis=0) / len(scores) + self.eps
+        z = (scores - self._pc_score_mean) / np.sqrt(self._pc_score_var)
+        gamma_hat = np.vstack([z[mask].mean(axis=0) for mask in masks])
+        delta_hat = np.vstack([z[mask].var(axis=0, ddof=1) + self.eps for mask in masks])
 
-        gamma_hat: list[npt.NDArray[np.float64]] = []
-        delta_hat: list[npt.NDArray[np.float64]] = []
-        for lvl in self._batch_levels_pc:
-            idx = batch == lvl
-            xb = scores_df.loc[idx]
-            gamma_hat.append(xb.mean(axis=0).values)
-            delta_hat.append(xb.var(axis=0, ddof=1).values + self.eps)
-        gamma_hat_arr = np.vstack(gamma_hat)
-        delta_hat_arr = np.vstack(delta_hat)
-
-        b_names = [str(lvl) for lvl in self._batch_levels_pc]
-        gamma_star, delta_star = self._shrink_eb(gamma_hat_arr, delta_hat_arr, n_per_batch, b_names)
-
-        gamma_star, delta_star, _ = self._apply_reference_shift(
-            gamma_star, delta_star, self._batch_levels_pc
+        self._pc_gamma, self._pc_delta, _ = self._apply_reference_shift(
+            gamma_hat, delta_hat, self._batch_levels, mean_only=False
         )
 
-        self._pc_gamma_star = gamma_star
-        self._pc_delta_star = delta_star
+    def _discrete_dummies(self, disc: pd.DataFrame, *, fit: bool) -> pd.DataFrame:
+        """Dummy-code discrete covariates against the levels recorded at fit.
+
+        Frozen levels keep ``transform`` a function of each sample alone, so a subset
+        missing a level is not coded as the reference level.
+        """
+        if fit:
+            self._discrete_levels = {col: _fit_levels(disc[col]) for col in disc.columns}
+        coded = pd.DataFrame(index=disc.index)
+        for col in disc.columns:
+            if col not in self._discrete_levels:
+                raise ValueError(
+                    f"discrete covariate {col!r} was not present at fit. Pass the same "
+                    f"covariate columns to transform as to fit. Seen at fit: "
+                    f"{list(self._discrete_levels)}."
+                )
+            coded[col] = _code_levels(
+                disc[col], self._discrete_levels[col], f"discrete_covariates column {col!r}"
+            )
+        return pd.get_dummies(coded, drop_first=True).astype(float)
 
     def _build_longitudinal_design(
         self,
@@ -655,6 +682,8 @@ class ComBatModel:
         disc: pd.DataFrame | None,
         cont: pd.DataFrame | None,
         time: pd.DataFrame | None,
+        *,
+        fit: bool,
     ) -> tuple[FloatArray, list[str]]:
         """Assemble the fixed-effects design [batch dummies | covariates | time].
 
@@ -665,9 +694,7 @@ class ComBatModel:
 
         nonbatch_parts: list[pd.DataFrame] = []
         if disc is not None:
-            nonbatch_parts.append(
-                pd.get_dummies(disc.astype("category"), drop_first=True).astype(float)
-            )
+            nonbatch_parts.append(self._discrete_dummies(disc, fit=fit))
         if cont is not None:
             nonbatch_parts.append(cont.astype(float))
         if time is not None:
@@ -694,10 +721,8 @@ class ComBatModel:
     ) -> None:
         """Longitudinal ComBat (*Beer et al.* 2020).
 
-        Identical to Fortin's standardize -> per-batch gamma/delta -> empirical
-        Bayes -> remove pipeline, except the fixed-effects mean model is fit with
-        a per-subject random intercept (REML), and the random-intercept BLUP is
-        included in the standardization mean.
+        As Fortin, but the mean model has a per-subject random intercept (REML) whose
+        BLUP is included in the standardization mean.
         """
         if subject_id is None:
             raise ValueError(
@@ -719,7 +744,9 @@ class ComBatModel:
             )
 
         time = self._to_df(time_covariate, X.index, "time_covariate")
-        design, self._nonbatch_columns = self._build_longitudinal_design(X, batch, disc, cont, time)
+        design, self._nonbatch_columns = self._build_longitudinal_design(
+            X, batch, disc, cont, time, fit=True
+        )
         self._design_cond = float(la.cond(design)) if design.shape[1] else 1.0
         self._design_rank = int(la.matrix_rank(design)) if design.shape[1] else None
         self._design_ncols = design.shape[1] if design.shape[1] else None
@@ -767,7 +794,11 @@ class ComBatModel:
         b_names = [str(lvl) for lvl in self._batch_levels]
         gamma_star, delta_star = self._shrink_eb(gamma_hat, delta_hat, n_per_batch_arr, b_names)
         gamma_star, delta_star, self._reference_batch_idx = self._apply_reference_shift(
-            gamma_star, delta_star, self._batch_levels
+            gamma_star,
+            delta_star,
+            self._batch_levels,
+            gamma_hat=gamma_hat,
+            delta_hat=delta_hat,
         )
 
         self._gamma_star = gamma_star
@@ -784,58 +815,58 @@ class ComBatModel:
         tol: float = 1e-4,
         batch_names: list[str] | None = None,
     ) -> tuple[FloatArray, FloatArray]:
-        """Empirical Bayes shrinkage estimation.
+        """Empirical Bayes shrinkage estimation (Johnson et al. 2007).
 
-        Both the parametric and non-parametric branches use an iterative
-        scheme that alternates between updating gamma (location) and delta
-        (scale) posteriors until convergence.
-
-        With fewer than two units (features, or PCs for CovBat) the prior
-        variance is non-identifiable, so the posterior reduces to the per-unit
-        MLE (no shrinkage) - the exact boundary limit of the estimator.
+        Hyperpriors are per batch, pooled over units, as in ``sva::ComBat``; the
+        non-parametric branch is ``sva``'s ``int.eprior``. With fewer than two units
+        the prior is non-identifiable and the per-unit MLE is returned.
         """
-        B, _p = gamma_hat.shape
+        B, p = gamma_hat.shape
         n_vec = (
             np.array(list(n_per_batch.values())) if isinstance(n_per_batch, dict) else n_per_batch
         )
-        convergence_info: list[dict[str, object]] = []
+        names = [batch_names[i] if batch_names else str(i) for i in range(B)]
 
-        if _p < 2:
-            # < 2 units: no cross-unit prior, so reduce to the per-unit MLE.
-            self._convergence_info = [
+        def closed_form_info() -> list[dict[str, object]]:
+            return [
                 {
-                    "batch": batch_names[i] if batch_names else str(i),
+                    "batch": name,
                     "converged": True,
                     "iterations": 0,
                     "final_gamma_change": 0.0,
                     "final_delta_change": 0.0,
+                    "closed_form": True,
                 }
-                for i in range(B)
+                for name in names
             ]
-            delta_star = np.ones_like(delta_hat) if self.mean_only else delta_hat.copy()
-            return gamma_hat.copy(), delta_star
 
-        gamma_bar = gamma_hat.mean(axis=0)
-        t2 = np.maximum(gamma_hat.var(axis=0, ddof=1), self.eps)
-
-        def postmean(
-            g_hat: FloatArray,
-            g_bar: FloatArray,
-            n: float,
-            d_star: FloatArray,
-            t2_: FloatArray,
-        ) -> FloatArray:
-            return (t2_ * n * g_hat + d_star * g_bar) / (t2_ * n + d_star)
-
-        def postvar(
-            sum2: FloatArray, n: float, a: FloatArray | float, b: FloatArray | float
-        ) -> FloatArray:
-            return (0.5 * sum2 + b) / (n / 2.0 + a - 1.0)
+        if p < 2:
+            self._convergence_info = closed_form_info()
+            return gamma_hat.copy(), delta_hat.copy()
 
         if parametric:
-            delta_var = np.maximum(delta_hat.var(axis=0, ddof=1), self.eps)
-            a_prior = (delta_hat.mean(axis=0) ** 2) / delta_var + 2
-            b_prior = delta_hat.mean(axis=0) * (a_prior - 1)
+            gamma_bar = gamma_hat.mean(axis=1)
+            t2 = np.maximum(gamma_hat.var(axis=1, ddof=1), self.eps)
+
+            def postmean(
+                g_hat: FloatArray,
+                g_bar: FloatArray,
+                n: float,
+                d_star: FloatArray,
+                t2_: FloatArray,
+            ) -> FloatArray:
+                return (t2_ * n * g_hat + d_star * g_bar) / (t2_ * n + d_star)
+
+            def postvar(
+                sum2: FloatArray, n: float, a: FloatArray | float, b: FloatArray | float
+            ) -> FloatArray:
+                return (0.5 * sum2 + b) / (n / 2.0 + a - 1.0)
+
+            convergence_info: list[dict[str, object]] = []
+            delta_mean = delta_hat.mean(axis=1)
+            delta_var = np.maximum(delta_hat.var(axis=1, ddof=1), self.eps)
+            a_prior = delta_mean**2 / delta_var + 2
+            b_prior = delta_mean * (a_prior - 1)
 
             gamma_star = np.empty_like(gamma_hat)
             delta_star = np.empty_like(delta_hat)
@@ -845,19 +876,19 @@ class ComBatModel:
                 g_hat_i = gamma_hat[i]
                 d_hat_i = np.maximum(delta_hat[i], self.eps)
 
-                g_new = postmean(g_hat_i, gamma_bar, n_i, d_hat_i, t2)
+                g_new = postmean(g_hat_i, gamma_bar[i], n_i, d_hat_i, t2[i])
                 sum2 = (n_i - 1) * d_hat_i + n_i * (g_hat_i - g_new) ** 2
-                d_new = postvar(sum2, n_i, a_prior, b_prior)
+                d_new = postvar(sum2, n_i, a_prior[i], b_prior[i])
 
                 converged = False
                 n_iter = 0
                 gamma_change = float("inf")
                 delta_change = float("inf")
-                for n_iter in range(1, max_iter + 1):  # noqa: B007  # used after loop
+                for n_iter in range(1, max_iter + 1):  # noqa: B007
                     g_prev, d_prev = g_new, d_new
-                    g_new = postmean(g_hat_i, gamma_bar, n_i, d_prev, t2)
+                    g_new = postmean(g_hat_i, gamma_bar[i], n_i, d_prev, t2[i])
                     sum2 = (n_i - 1) * d_hat_i + n_i * (g_hat_i - g_new) ** 2
-                    d_new = postvar(sum2, n_i, a_prior, b_prior)
+                    d_new = postvar(sum2, n_i, a_prior[i], b_prior[i])
                     gamma_change = float(
                         np.max(np.abs(g_new - g_prev) / (np.abs(g_prev) + self.eps))
                     )
@@ -868,7 +899,7 @@ class ComBatModel:
                         converged = True
                         break
 
-                b_name = batch_names[i] if batch_names else str(i)
+                b_name = names[i]
                 if not converged:
                     warnings.warn(
                         f"Parametric EB did not converge for batch '{b_name}' "
@@ -884,82 +915,35 @@ class ComBatModel:
                         "iterations": n_iter,
                         "final_gamma_change": gamma_change,
                         "final_delta_change": delta_change,
+                        "closed_form": False,
                     }
                 )
                 gamma_star[i] = g_new
-                delta_star[i] = 1.0 if self.mean_only else d_new
+                delta_star[i] = d_new
             self._convergence_info = convergence_info
             return gamma_star, delta_star
 
-        else:
-
-            def _moment_var(delta: FloatArray) -> float:
-                # Floor non-finite / tiny prior variance (defense-in-depth).
-                s2 = float(delta.var(ddof=1))
-                return self.eps if (not np.isfinite(s2) or s2 < self.eps) else s2
-
-            def aprior(delta: FloatArray) -> float:
-                m = float(delta.mean())
-                s2 = _moment_var(delta)
-                return (2 * s2 + m**2) / s2
-
-            def bprior(delta: FloatArray) -> float:
-                m = float(delta.mean())
-                s2 = _moment_var(delta)
-                return (m * s2 + m**3) / s2
-
-            gamma_star = np.empty_like(gamma_hat)
-            delta_star = np.empty_like(delta_hat)
-
-            for i in range(B):
-                n_i = n_vec[i]
-                g_hat_i = gamma_hat[i]
-                d_hat_i = delta_hat[i]
-                a_i = aprior(d_hat_i)
-                b_i = bprior(d_hat_i)
-
-                converged = False
-                n_iter = 0
-                gamma_change = float("inf")
-                delta_change = float("inf")
-                g_new, d_new = g_hat_i.copy(), d_hat_i.copy()
-                for n_iter in range(1, max_iter + 1):  # noqa: B007  # used after loop
-                    g_prev, d_prev = g_new, d_new
-                    g_new = postmean(g_hat_i, gamma_bar, n_i, d_prev, t2)
-                    sum2 = (n_i - 1) * d_hat_i + n_i * (g_hat_i - g_new) ** 2
-                    d_new = postvar(sum2, n_i, a_i, b_i)
-                    gamma_change = float(
-                        np.max(np.abs(g_new - g_prev) / (np.abs(g_prev) + self.eps))
-                    )
-                    delta_change = float(
-                        np.max(np.abs(d_new - d_prev) / (np.abs(d_prev) + self.eps))
-                    )
-                    if gamma_change < tol and (self.mean_only or delta_change < tol):
-                        converged = True
-                        break
-
-                b_name = batch_names[i] if batch_names else str(i)
-                if not converged:
-                    warnings.warn(
-                        f"Non-parametric EB did not converge for batch '{b_name}' "
-                        f"within {max_iter} iterations "
-                        f"(final relative change: {max(gamma_change, delta_change):.2e}, "
-                        f"tol: {tol:.1e}). Results may be unreliable for this batch.",
-                        stacklevel=2,
-                    )
-                convergence_info.append(
-                    {
-                        "batch": b_name,
-                        "converged": converged,
-                        "iterations": n_iter,
-                        "final_gamma_change": gamma_change,
-                        "final_delta_change": delta_change,
-                    }
-                )
-                gamma_star[i] = g_new
-                delta_star[i] = 1.0 if self.mean_only else d_new
-            self._convergence_info = convergence_info
-            return gamma_star, delta_star
+        # Log-space weights: a large batch would otherwise underflow them all.
+        gamma_star = np.empty_like(gamma_hat)
+        delta_star = np.empty_like(delta_hat)
+        block = max(1, _EPRIOR_BLOCK_ELEMENTS // p)
+        for i in range(B):
+            n_i = float(n_vec[i])
+            g = gamma_hat[i]
+            d = np.maximum(delta_hat[i], self.eps)
+            log_norm = -0.5 * n_i * np.log(2.0 * np.pi * d)
+            for start in range(0, p, block):
+                stop = min(start + block, p)
+                own = np.arange(start, stop)
+                sum2 = (n_i - 1.0) * d[own, None] + n_i * (g[own, None] - g[None, :]) ** 2
+                log_lh = log_norm[None, :] - sum2 / (2.0 * d[None, :])
+                log_lh[own - start, own] = -np.inf
+                weights = np.exp(log_lh - log_lh.max(axis=1, keepdims=True))
+                weights /= weights.sum(axis=1, keepdims=True)
+                gamma_star[i, start:stop] = weights @ g
+                delta_star[i, start:stop] = weights @ d
+        self._convergence_info = closed_form_info()
+        return gamma_star, delta_star
 
     def _shrink_gamma(
         self,
@@ -987,12 +971,7 @@ class ComBatModel:
         n_per_batch: dict[str, int] | FloatArray,
         batch_names: list[str],
     ) -> tuple[FloatArray, FloatArray]:
-        """Empirical-Bayes shrinkage honoring ``mean_only`` (returns gamma*, delta*).
-
-        Shared by every ``_fit_*`` engine: in ``mean_only`` mode only the location
-        (gamma) is shrunk and delta* is fixed to ones; otherwise both location and
-        scale posteriors are estimated.
-        """
+        """Empirical-Bayes shrinkage honoring ``mean_only`` (returns gamma*, delta*)."""
         if self.mean_only:
             gamma_star = self._shrink_gamma(
                 gamma_hat,
@@ -1017,24 +996,32 @@ class ComBatModel:
         gamma_star: FloatArray,
         delta_star: FloatArray,
         batch_levels: pd.Index,
+        *,
+        gamma_hat: FloatArray | None = None,
+        delta_hat: FloatArray | None = None,
+        mean_only: bool | None = None,
     ) -> tuple[FloatArray, FloatArray, int | None]:
         """Re-express gamma*/delta* relative to the reference batch.
 
-        Used by the johnson, chen, and longitudinal engines: the reference batch's
-        location is subtracted from every gamma* and (unless ``mean_only``) its
-        scale divides every delta*, so the reference level maps to (0, 1) and the
-        others are expressed relative to it. Returns the shifted arrays and the
-        reference index (``None`` when no reference batch is set).
-
-        Fortin bakes the reference directly into the design matrix instead (its
-        reference dummy is set to 1), so it does not use this helper.
+        The target is the reference batch's own unshrunk ``gamma_hat``/``delta_hat`` when
+        given, as in ``sva::ComBat``. Returns the shifted arrays and the reference index
+        (``None`` without one). ``mean_only`` defaults to the estimator's. Fortin uses
+        its design instead.
         """
+        if mean_only is None:
+            mean_only = self.mean_only
         if self.reference_batch is None:
             return gamma_star, delta_star, None
         ref_idx = list(batch_levels).index(self.reference_batch)
-        gamma_star = gamma_star - gamma_star[ref_idx]
-        if not self.mean_only:
-            delta_star = delta_star / delta_star[ref_idx]
+        gamma_ref = (gamma_star if gamma_hat is None else gamma_hat)[ref_idx]
+        delta_ref = (delta_star if delta_hat is None else delta_hat)[ref_idx]
+        if mean_only:
+            gamma_star = gamma_star - gamma_ref
+        else:
+            # Transforms apply (x - g') / sqrt(d'), so gamma_ref scales by sqrt(d').
+            ratio = delta_star / delta_ref
+            gamma_star = gamma_star - gamma_ref * np.sqrt(ratio)
+            delta_star = ratio
         return gamma_star, delta_star, ref_idx
 
     def transform(
@@ -1136,6 +1123,21 @@ class ComBatModel:
         cont: pd.DataFrame | None,
     ) -> pd.DataFrame:
         """Fortin transform implementation (also serves the gam method)."""
+        resid, stand_mu = self._fortin_residuals(X, batch, disc, cont)
+        return pd.DataFrame(resid + stand_mu, index=X.index, columns=X.columns, dtype=float)
+
+    def _fortin_residuals(
+        self,
+        X: pd.DataFrame,
+        batch: pd.Series,
+        disc: pd.DataFrame | None,
+        cont: pd.DataFrame | None,
+    ) -> tuple[FloatArray, FloatArray]:
+        """Return ``(resid, stand_mu)``, whose sum is the Fortin-harmonized data.
+
+        ``stand_mu`` is the intercept plus the protected covariate effects, so
+        ``resid`` is the ComBat-adjusted residual of Chen et al. (2022), Step 1.
+        """
         if self._is_gam():
             cont = self._apply_smooth_terms(cont, fit=False)
 
@@ -1146,9 +1148,7 @@ class ComBatModel:
 
         nonbatch_parts: list[pd.DataFrame] = []
         if disc is not None:
-            nonbatch_parts.append(
-                pd.get_dummies(disc.astype("category"), drop_first=True).astype(float)
-            )
+            nonbatch_parts.append(self._discrete_dummies(disc, fit=False))
         if cont is not None:
             nonbatch_parts.append(cont.astype(float))
 
@@ -1171,7 +1171,6 @@ class ComBatModel:
             if not idx.any():
                 continue
             if self.reference_batch is not None and lvl == self.reference_batch:
-                # leave reference samples unchanged
                 continue
 
             g = self._gamma_star[i]
@@ -1181,8 +1180,8 @@ class ComBatModel:
             else:
                 Xs[idx] = (Xs[idx] - g) / np.sqrt(d)
 
-        X_adj = Xs * np.sqrt(pooled_vals) + stand_mu
-        return pd.DataFrame(X_adj, index=X.index, columns=X.columns, dtype=float)
+        resid: FloatArray = Xs * np.sqrt(pooled_vals)
+        return resid, stand_mu
 
     def _transform_chen(
         self,
@@ -1191,27 +1190,29 @@ class ComBatModel:
         disc: pd.DataFrame | None,
         cont: pd.DataFrame | None,
     ) -> pd.DataFrame:
-        """Chen transform implementation."""
-        X_meanvar_adj = self._transform_fortin(X, batch, disc, cont)
-        scores = self._covbat_pca.transform(X_meanvar_adj)
-        n_pc = self._covbat_n_pc
-        scores_adj = scores.copy()
+        """Chen et al. (2022) Step 4 (also serves the covbat_gam method).
 
-        for i, lvl in enumerate(self._batch_levels_pc):
-            idx = batch == lvl
+        Only the change in the retained scores is added to the residual, so a held-out
+        row keeps the part outside the training PC span and the reference is untouched.
+        """
+        resid, stand_mu = self._fortin_residuals(X, batch, disc, cont)
+        n_pc = self._covbat_n_pc
+        retained = self._covbat_pca.components_[:n_pc]
+        scores = self._covbat_pca.transform(resid)[:, :n_pc]
+        score_sd = np.sqrt(self._pc_score_var)
+        z = (scores - self._pc_score_mean) / score_sd
+        z_adj = z.copy()
+
+        for i, lvl in enumerate(self._batch_levels):
+            idx = np.asarray(batch == lvl)
             if not idx.any():
                 continue
             if self.reference_batch is not None and lvl == self.reference_batch:
                 continue
-            g = self._pc_gamma_star[i]
-            d = self._pc_delta_star[i]
-            if self.mean_only:
-                scores_adj[idx, :n_pc] = scores_adj[idx, :n_pc] - g
-            else:
-                scores_adj[idx, :n_pc] = (scores_adj[idx, :n_pc] - g) / np.sqrt(d)
+            z_adj[idx] = (z[idx] - self._pc_gamma[i]) / np.sqrt(self._pc_delta[i])
 
-        X_recon = self._covbat_pca.inverse_transform(scores_adj)
-        return pd.DataFrame(X_recon, index=X.index, columns=X.columns)
+        resid_covbat = resid + ((z_adj - z) * score_sd) @ retained
+        return pd.DataFrame(resid_covbat + stand_mu, index=X.index, columns=X.columns)
 
     def _transform_longitudinal(
         self,
@@ -1228,8 +1229,9 @@ class ComBatModel:
 
         n_features = len(self._grand_mean)
         time = self._to_df(time_covariate, X.index, "time_covariate")
-        design, nonbatch_columns = self._build_longitudinal_design(X, batch, disc, cont, time)
-        # Realign non-batch columns to those seen at fit (handles unseen covariate levels).
+        design, nonbatch_columns = self._build_longitudinal_design(
+            X, batch, disc, cont, time, fit=False
+        )
         nonbatch_design = pd.DataFrame(
             design[:, self._n_batch :],
             index=X.index,

@@ -8,7 +8,12 @@ import pytest
 from sklearn.base import clone
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
-from utils import simulate_nested_data
+from utils import (
+    residual_batch_gap,
+    simulate_nested_data,
+    simulate_species_covbat_data,
+    within_batch_species_gap,
+)
 
 from combatlearn import NestedComBat
 from combatlearn.core import ComBatModel
@@ -108,7 +113,12 @@ def test_gmm_roles_run(role):
         continuous_covariates=cont,
         gmm=role,
         random_state=0,
-    ).fit(X)
+    )
+    if role == "batch":
+        with pytest.warns(UserWarning, match="exhaustive order search"):
+            est.fit(X)
+    else:
+        est.fit(X)
     assert est._gmm_grouping is not None
     out = est.transform(X)
     assert np.isfinite(out.values).all()
@@ -123,7 +133,8 @@ def test_gmm_batch_and_covariate_differ():
         "continuous_covariates": cont,
         "random_state": 0,
     }
-    as_batch = NestedComBat(**common, gmm="batch").fit_transform(X)
+    with pytest.warns(UserWarning, match="exhaustive order search"):
+        as_batch = NestedComBat(**common, gmm="batch").fit_transform(X)
     as_cov = NestedComBat(**common, gmm="covariate").fit_transform(X)
     assert not np.allclose(as_batch.values, as_cov.values)
 
@@ -131,7 +142,8 @@ def test_gmm_batch_and_covariate_differ():
 def test_gmm_batch_adds_extra_variable_to_order():
     """gmm='batch' adds a 'GMM' batch variable that joins the harmonization order."""
     X, batch, _, _ = simulate_nested_data(latent_split=True, random_state=0)
-    est = NestedComBat(batch=batch, gmm="batch", random_state=0).fit(X)
+    with pytest.warns(UserWarning, match="exhaustive order search"):
+        est = NestedComBat(batch=batch, gmm="batch", random_state=0).fit(X)
     assert "GMM" in est.order_
     assert set(est.order_) == set(batch.columns) | {"GMM"}
 
@@ -156,6 +168,19 @@ def test_split_fit_transform_matches_fit_transform():
     a = NestedComBat(**common).fit(X).transform(X)
     b = NestedComBat(**common).fit_transform(X)
     np.testing.assert_allclose(a.values, b.values, rtol=1e-10, atol=1e-10)
+
+
+def test_null_discrete_covariate_raises():
+    """A null discrete covariate is rejected at fit and at transform."""
+    X, batch, disc, _ = simulate_nested_data(random_state=0)
+    bad = disc.copy()
+    bad.iloc[3, 0] = np.nan
+    with pytest.raises(ValueError, match="NaN"):
+        NestedComBat(batch=batch, discrete_covariates=bad, optimize_order=False).fit(X)
+    est = NestedComBat(batch=batch, discrete_covariates=disc, optimize_order=False).fit(X)
+    est.discrete_covariates = bad
+    with pytest.raises(ValueError, match="NaN"):
+        est.transform(X)
 
 
 def test_unseen_batch_level_raises():
@@ -296,11 +321,43 @@ def test_nested_matches_manual_sequential_combat():
     np.testing.assert_allclose(nested.values, x_current.values, rtol=1e-10, atol=1e-10)
 
 
+@pytest.mark.parametrize(("base", "covbat"), [("fortin", "chen"), ("gam", "covbat_gam")])
+def test_covbat_engine_preserves_discrete_covariate_effect(base, covbat):
+    """Nested CovBat steps keep the covariate effect that the matching mean model keeps.
+
+    The species mix is unbalanced across sites; the site gap must still be removed.
+    """
+    X, site, disc = simulate_species_covbat_data()
+    scanner = pd.Series(np.where(np.arange(len(X)) % 2 == 0, "GE", "SI"), index=X.index)
+    batch = pd.DataFrame({"site": site, "scanner": scanner})
+    age = np.random.default_rng(0).uniform(20, 80, len(X))
+    kwargs = {
+        "batch": batch,
+        "discrete_covariates": disc,
+        "continuous_covariates": pd.DataFrame({"age": age}, index=X.index),
+        "optimize_order": False,
+    }
+    reference = NestedComBat(method=base, **kwargs).fit_transform(X)
+    harmonized = NestedComBat(method=covbat, **kwargs).fit_transform(X)
+
+    reference_gap = within_batch_species_gap(reference, site, disc)
+    covbat_gap = within_batch_species_gap(harmonized, site, disc)
+    assert covbat_gap >= 0.9 * reference_gap, (
+        f"Nested {covbat} species gap {covbat_gap:.3f} < 0.9 x nested {base} "
+        f"gap {reference_gap:.3f}"
+    )
+    raw_batch_gap = residual_batch_gap(X, site, disc)
+    covbat_batch_gap = residual_batch_gap(harmonized, site, disc)
+    assert covbat_batch_gap <= 0.05 * raw_batch_gap, (
+        f"Nested {covbat} residual site gap {covbat_batch_gap:.3f} > 5% of raw {raw_batch_gap:.3f}"
+    )
+
+
 def test_no_spurious_warnings_on_clean_data():
     """A well-specified nested fit on clean data should not warn."""
     X, batch, disc, cont = simulate_nested_data(random_state=0)
     with warnings.catch_warnings():
-        warnings.simplefilter("error")
+        warnings.simplefilter("error", UserWarning)
         NestedComBat(
             batch=batch, discrete_covariates=disc, continuous_covariates=cont
         ).fit_transform(X)

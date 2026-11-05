@@ -106,20 +106,19 @@ def test_plot_feature_diagnostics_kind_combined_grouped():
 
 
 def test_plot_feature_diagnostics_combined_diverging():
-    """Test kind='combined' with layout='diverging' renders two side panels."""
+    """layout='diverging' renders a Location panel with inverted x-axis and a Scale panel."""
     X, batch = simulate_data(n_samples=100, n_features=25)
     combat = ComBat(batch=batch, method="johnson").fit(X)
 
     fig = plot_feature_diagnostics(combat, kind="combined", layout="diverging")
     assert fig is not None
 
-    # Two panels: Location (x-axis inverted -> grows leftward) and Scale.
     assert len(fig.axes) == 2
     ax_loc, ax_scale = fig.axes
     assert ax_loc.get_title() == "Location"
     assert ax_scale.get_title() == "Scale"
     lo, hi = ax_loc.get_xlim()
-    assert lo > hi  # inverted axis
+    assert lo > hi
 
 
 def test_plot_feature_diagnostics_diverging_requires_combined():
@@ -191,11 +190,10 @@ def test_heatmap_returns_figure():
 
 
 def test_heatmap_top_n():
-    """plot_batch_effect_heatmap respects top_n parameter."""
+    """plot_batch_effect_heatmap with top_n and mean_only=False draws both heatmaps."""
     X, batch = simulate_data(n_samples=100, n_features=25)
     combat = ComBat(batch=batch).fit(X)
     fig = plot_batch_effect_heatmap(combat, top_n=10)
-    # With mean_only=False, 2 subplots
     assert len(fig.axes) >= 2
 
 

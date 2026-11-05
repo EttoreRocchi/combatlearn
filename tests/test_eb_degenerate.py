@@ -1,9 +1,4 @@
-"""Single-unit empirical-Bayes degeneracy: EB must reduce to the MLE, not NaN.
-
-With fewer than two units (features, or PCs for CovBat) the non-parametric prior
-used to take the variance of a single value (0 DoF -> NaN). The fix degenerates to
-the per-unit MLE (no shrinkage) for both branches.
-"""
+"""Single-feature empirical Bayes reduces to the MLE, and a single CovBat PC stays finite."""
 
 import warnings
 
@@ -51,7 +46,7 @@ def test_nonparametric_single_unit_is_finite(method):
 
 
 def test_covbat_nonparametric_single_pc_is_finite():
-    """Many features collapsing to one PC (the common CovBat trigger) stays finite."""
+    """CovBat retaining a single PC stays finite with non-parametric EB on the features."""
     rng = np.random.default_rng(0)
     n = 120
     data = rng.standard_normal((n, 10))
@@ -87,11 +82,13 @@ def test_single_feature_fully_removes_batch_means():
 
 
 def test_multifeature_still_runs_eb_not_shortcircuit():
-    """With >=2 features the short-circuit must NOT trigger (EB still iterates)."""
-    X, batch = simulate_data()  # 25 features
-    est = ComBat(batch=batch, method="johnson", parametric=False).fit(X)
-    info = est._model._convergence_info
-    assert all(c["iterations"] >= 1 for c in info)
+    """With many features non-parametric EB shrinks the estimates instead of returning the MLE."""
+    X, batch = simulate_data()
+    model = ComBat(batch=batch, method="johnson", parametric=False).fit(X)._model
+    Xs = (X - model._grand_mean) / np.sqrt(model._pooled_var)
+    gamma_mle = np.vstack([Xs[batch == lvl].mean(axis=0) for lvl in model._batch_levels])
+    assert not np.allclose(model._gamma_star, gamma_mle)
+    assert all(c["closed_form"] for c in model._convergence_info)
 
 
 def test_covbat_single_pc_warns():
@@ -100,7 +97,7 @@ def test_covbat_single_pc_warns():
     n = 120
     X = pd.DataFrame(rng.standard_normal((n, 8)))
     batch = pd.Series(rng.choice(list("AB"), n))
-    with pytest.warns(UserWarning, match="single principal component"):
+    with pytest.warns(UserWarning, match="fewer than two principal components"):
         ComBat(batch=batch, method="chen", covbat_cov_thresh=1).fit(X)
 
 
